@@ -345,7 +345,7 @@ private fun RemoteVideoPanel(
     val surfaceView = remember {
         SurfaceViewRenderer(context).apply {
             init(renderer.eglBaseContext, null)
-            setEnableHardwareScaler(false)
+            setEnableHardwareScaler(true)
             setMirror(renderer.mirror)
             setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             setZOrderMediaOverlay(false)

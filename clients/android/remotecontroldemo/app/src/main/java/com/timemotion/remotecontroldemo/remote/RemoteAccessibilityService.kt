@@ -2,26 +2,50 @@ package com.timemotion.remotecontroldemo.remote
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ComponentName
+import android.content.Context
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.graphics.Path
+import android.provider.Settings
+import android.text.TextUtils
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 class RemoteAccessibilityService : AccessibilityService() {
+    override fun onCreate() {
+        super.onCreate()
+        Log.i(TAG, "onCreate")
+    }
+
     override fun onServiceConnected() {
+        super.onServiceConnected()
+        Log.i(TAG, "onServiceConnected")
         instance = this
+        stateListener?.invoke(true)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        Log.w(TAG, "onInterrupt")
+    }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        Log.w(TAG, "onUnbind")
         instance = null
+        stateListener?.invoke(false)
         return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        Log.w(TAG, "onDestroy")
+        instance = null
+        stateListener?.invoke(false)
+        super.onDestroy()
     }
 
     fun execute(command: RemoteCommand): Boolean {
@@ -139,7 +163,29 @@ class RemoteAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val TAG = "RemoteA11yService"
+
         @Volatile
         var instance: RemoteAccessibilityService? = null
+
+        @Volatile
+        var stateListener: ((Boolean) -> Unit)? = null
+
+        fun isEnabled(context: Context): Boolean {
+            val serviceId = ComponentName(context, RemoteAccessibilityService::class.java).flattenToString()
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+            val splitter = TextUtils.SimpleStringSplitter(':').apply {
+                setString(enabledServices)
+            }
+            while (splitter.hasNext()) {
+                if (splitter.next().equals(serviceId, ignoreCase = true)) {
+                    return true
+                }
+            }
+            return false
+        }
     }
 }

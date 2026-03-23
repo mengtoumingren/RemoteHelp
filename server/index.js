@@ -6,6 +6,7 @@ const { WebSocket, WebSocketServer } = require("ws");
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 const STUN_URL = process.env.STUN_URL || "stun:stun.timemotion.top:3478";
+const TURN_URL = process.env.TURN_URL || "turn:turn.timemotion.top:3478";
 
 const app = express();
 app.use(express.json());
@@ -17,7 +18,7 @@ app.get("/health", (_req, res) => {
 app.get("/config", (_req, res) => {
   res.json({
     wsUrlPath: "/ws",
-    iceServers: [{ urls: [STUN_URL] }],
+    iceServers: [{ urls: [STUN_URL, TURN_URL] }],
   });
 });
 

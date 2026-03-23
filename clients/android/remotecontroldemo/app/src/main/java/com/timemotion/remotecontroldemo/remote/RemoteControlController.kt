@@ -26,6 +26,7 @@ import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import kotlin.math.roundToInt
 
 class RemoteControlController(
     context: Context
@@ -67,6 +68,9 @@ class RemoteControlController(
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
 
+        RemoteAccessibilityService.stateListener = { enabled ->
+            mainHandler.post { onAccessibilityAvailabilityChanged(enabled) }
+        }
         ScreenCaptureForegroundService.statusListener = ::onForegroundServiceChanged
         ScreenCaptureForegroundService.messageListener = ::pushStatus
     }
@@ -219,6 +223,7 @@ class RemoteControlController(
 
     fun release() {
         disconnect()
+        RemoteAccessibilityService.stateListener = null
         ScreenCaptureForegroundService.statusListener = null
         ScreenCaptureForegroundService.messageListener = null
         peerConnectionFactory.dispose()
@@ -580,11 +585,10 @@ class RemoteControlController(
         val metrics = appContext.readDeviceScreenMetrics()
         val screenWidth = metrics.width
         val screenHeight = metrics.height
-        val maxLongEdge = 960
-        val longEdge = maxOf(screenWidth, screenHeight)
-        val scale = if (longEdge > maxLongEdge) maxLongEdge.toFloat() / longEdge.toFloat() else 1f
-        val captureWidth = (screenWidth * scale).toInt().coerceAtLeast(320)
-        val captureHeight = (screenHeight * scale).toInt().coerceAtLeast(568)
+        val longSide = maxOf(screenWidth, screenHeight)
+        val scale = minOf(1f, SCREEN_SHARE_MAX_LONG_SIDE.toFloat() / longSide.toFloat())
+        val captureWidth = (screenWidth * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_WIDTH).ensureEven()
+        val captureHeight = (screenHeight * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_HEIGHT).ensureEven()
         return CaptureProfile(screenWidth, screenHeight, captureWidth, captureHeight)
     }
 
@@ -597,7 +601,7 @@ class RemoteControlController(
         }
         encodings.forEach { encoding ->
             encoding.maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS
-            encoding.minBitrateBps = SCREEN_SHARE_MIN_BITRATE_BPS
+            encoding.minBitrateBps = null
             encoding.maxFramerate = SCREEN_SHARE_MAX_FPS
             encoding.scaleResolutionDownBy = 1.0
         }
@@ -623,7 +627,24 @@ class RemoteControlController(
         }
     }
 
-    private fun isAccessibilityEnabled(): Boolean = RemoteAccessibilityService.instance != null
+    private fun isAccessibilityEnabled(): Boolean = RemoteAccessibilityService.isEnabled(appContext)
+
+    private fun onAccessibilityAvailabilityChanged(enabled: Boolean) {
+        val current = _uiState.value.targetStatus
+        val message = when {
+            _uiState.value.selectedRole != RemoteRole.TARGET -> current.message
+            current.captureActive && enabled -> "WebRTC 屏幕流已就绪，可接受远控"
+            current.captureActive -> "屏幕流已启动，请开启无障碍服务"
+            enabled -> "无障碍服务已开启，请继续授权屏幕采集"
+            else -> current.message
+        }
+        updateTargetStatus(
+            current.copy(
+                accessibilityEnabled = enabled,
+                message = message
+            )
+        )
+    }
 
     private fun pushStatus(message: String) {
         _uiState.value = _uiState.value.copy(status = message)
@@ -641,9 +662,13 @@ private data class CaptureProfile(
     val captureHeight: Int
 )
 
-private const val SCREEN_SHARE_MIN_BITRATE_BPS = 250_000
-private const val SCREEN_SHARE_MAX_BITRATE_BPS = 900_000
-private const val SCREEN_SHARE_MAX_FPS = 30
+private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
+
+private const val SCREEN_SHARE_MIN_WIDTH = 360
+private const val SCREEN_SHARE_MIN_HEIGHT = 640
+private const val SCREEN_SHARE_MAX_LONG_SIDE = 960
+private const val SCREEN_SHARE_MAX_BITRATE_BPS = 1_500_000
+private const val SCREEN_SHARE_MAX_FPS = 12
 
 private open class SimpleSdpObserver : SdpObserver {
     override fun onCreateSuccess(description: SessionDescription) = Unit

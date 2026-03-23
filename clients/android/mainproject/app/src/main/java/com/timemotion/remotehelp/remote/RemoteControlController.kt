@@ -26,6 +26,7 @@ import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import kotlin.math.roundToInt
 
 class RemoteControlController(
     context: Context
@@ -61,6 +62,9 @@ class RemoteControlController(
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
 
+        RemoteAccessibilityService.stateListener = { enabled ->
+            mainHandler.post { onAccessibilityAvailabilityChanged(enabled) }
+        }
         ScreenCaptureForegroundService.statusListener = ::onForegroundServiceChanged
         ScreenCaptureForegroundService.messageListener = ::pushStatus
     }
@@ -213,6 +217,7 @@ class RemoteControlController(
 
     fun release() {
         disconnect()
+        RemoteAccessibilityService.stateListener = null
         ScreenCaptureForegroundService.statusListener = null
         ScreenCaptureForegroundService.messageListener = null
         peerConnectionFactory.dispose()
@@ -537,8 +542,10 @@ class RemoteControlController(
         val metrics = appContext.readDeviceScreenMetrics()
         val screenWidth = metrics.width
         val screenHeight = metrics.height
-        val captureWidth = screenWidth.coerceAtLeast(320)
-        val captureHeight = screenHeight.coerceAtLeast(568)
+        val longSide = maxOf(screenWidth, screenHeight)
+        val scale = minOf(1f, SCREEN_SHARE_MAX_LONG_SIDE.toFloat() / longSide.toFloat())
+        val captureWidth = (screenWidth * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_WIDTH).ensureEven()
+        val captureHeight = (screenHeight * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_HEIGHT).ensureEven()
         return CaptureProfile(screenWidth, screenHeight, captureWidth, captureHeight)
     }
 
@@ -549,7 +556,7 @@ class RemoteControlController(
         if (encodings.isEmpty()) return
         encodings.forEach { encoding ->
             encoding.maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS
-            encoding.minBitrateBps = SCREEN_SHARE_MIN_BITRATE_BPS
+            encoding.minBitrateBps = null
             encoding.maxFramerate = SCREEN_SHARE_MAX_FPS
             encoding.scaleResolutionDownBy = 1.0
         }
@@ -572,7 +579,24 @@ class RemoteControlController(
         }
     }
 
-    private fun isAccessibilityEnabled(): Boolean = RemoteAccessibilityService.instance != null
+    private fun isAccessibilityEnabled(): Boolean = RemoteAccessibilityService.isEnabled(appContext)
+
+    private fun onAccessibilityAvailabilityChanged(enabled: Boolean) {
+        val current = _uiState.value.targetStatus
+        val message = when {
+            _uiState.value.selectedRole != RemoteRole.TARGET -> current.message
+            current.captureActive && enabled -> "屏幕流已就绪，可接受远控"
+            current.captureActive -> "屏幕流已启动，请开启无障碍服务"
+            enabled -> "无障碍服务已开启，请继续授权屏幕采集"
+            else -> current.message
+        }
+        updateTargetStatus(
+            current.copy(
+                accessibilityEnabled = enabled,
+                message = message
+            )
+        )
+    }
 
     private fun currentNotificationText(): String {
         val controllerName = _uiState.value.peers.firstOrNull { it.role == RemoteRole.CONTROLLER }?.displayName
@@ -605,9 +629,13 @@ private data class CaptureProfile(
     val captureHeight: Int
 )
 
-private const val SCREEN_SHARE_MIN_BITRATE_BPS = 8_000_000
-private const val SCREEN_SHARE_MAX_BITRATE_BPS = 20_000_000
-private const val SCREEN_SHARE_MAX_FPS = 24
+private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
+
+private const val SCREEN_SHARE_MIN_WIDTH = 360
+private const val SCREEN_SHARE_MIN_HEIGHT = 640
+private const val SCREEN_SHARE_MAX_LONG_SIDE = 960
+private const val SCREEN_SHARE_MAX_BITRATE_BPS = 1_500_000
+private const val SCREEN_SHARE_MAX_FPS = 12
 
 private open class SimpleSdpObserver : SdpObserver {
     override fun onCreateSuccess(description: SessionDescription) = Unit
