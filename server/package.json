@@ -1,0 +1,15 @@
+{
+  "name": "webrtc-demo-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal WebRTC signaling server for Android demo",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.1"
+  }
+}

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">webrtcdemo</string>
+    <string name="permission_required">需要相机和麦克风权限才能进行通话</string>
+</resources>
