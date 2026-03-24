@@ -15,11 +15,11 @@ class RemoteControlController(
     context: Context
 ) {
     companion object {
-        private const val SCREEN_SHARE_MIN_WIDTH = 360
-        private const val SCREEN_SHARE_MIN_HEIGHT = 640
+        private const val SCREEN_SHARE_MIN_WIDTH = 320
+        private const val SCREEN_SHARE_MIN_HEIGHT = 320
         private const val SCREEN_SHARE_MAX_LONG_SIDE = 960
-        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 600_000
-        private const val SCREEN_SHARE_MAX_FPS = 6
+        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 1_000_000
+        private const val SCREEN_SHARE_MAX_FPS = 15
         private const val TARGET_STATUS_STARTING = "屏幕采集权限已授权，正在启动屏幕流"
         private const val TARGET_STATUS_READY_WITH_ACCESSIBILITY = "屏幕流已启动，可接受远程协助"
         private const val TARGET_STATUS_READY_NEED_ACCESSIBILITY = "屏幕流已启动，请开启无障碍服务"
