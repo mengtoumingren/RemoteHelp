@@ -6,9 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
@@ -16,6 +14,10 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 class RemoteAccessibilityService : AccessibilityService() {
+    private val softKeyboardListener = AccessibilityService.SoftKeyboardController.OnShowModeChangedListener { _, showMode ->
+        softKeyboardStateListener?.invoke(showMode == SHOW_MODE_HIDDEN)
+    }
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate")
@@ -23,9 +25,13 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            softKeyboardController.addOnShowModeChangedListener(softKeyboardListener)
+        }
         Log.i(TAG, "onServiceConnected")
         instance = this
         stateListener?.invoke(true)
+        softKeyboardStateListener?.invoke(isSoftKeyboardHidden())
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
@@ -36,6 +42,9 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         Log.w(TAG, "onUnbind")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            softKeyboardController.removeOnShowModeChangedListener(softKeyboardListener)
+        }
         instance = null
         stateListener?.invoke(false)
         return super.onUnbind(intent)
@@ -43,6 +52,9 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         Log.w(TAG, "onDestroy")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            softKeyboardController.removeOnShowModeChangedListener(softKeyboardListener)
+        }
         instance = null
         stateListener?.invoke(false)
         super.onDestroy()
@@ -58,12 +70,7 @@ class RemoteAccessibilityService : AccessibilityService() {
                 val y = (command.screenY?.toFloat()
                     ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
                     .coerceIn(0f, metrics.height.toFloat())
-                if (focusEditableNodeAt(x.toInt(), y.toInt())) {
-                    return true
-                }
-                val path = Path().apply { moveTo(x, y) }
-                val stroke = GestureDescription.StrokeDescription(path, 0, 80)
-                dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+                activateEditableNodeAt(x.toInt(), y.toInt()) || dispatchTapGesture(x, y)
             }
 
             RemoteAction.SWIPE -> {
@@ -80,59 +87,99 @@ class RemoteAccessibilityService : AccessibilityService() {
                 val endY = (command.endScreenY?.toFloat()
                     ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
                     .coerceIn(0f, metrics.height.toFloat())
-                val path = Path().apply {
-                    moveTo(startX, startY)
-                    lineTo(endX, endY)
-                }
-                val stroke = GestureDescription.StrokeDescription(path, 0, 220)
-                dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+                dispatchSwipeGesture(startX, startY, endX, endY)
             }
 
-            RemoteAction.INPUT_TEXT -> setFocusedText(command.text, command.dismissKeyboard)
+            RemoteAction.DRAG -> {
+                val metrics = applicationContext.readDeviceScreenMetrics()
+                val startX = (command.screenX?.toFloat()
+                    ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                    .coerceIn(0f, metrics.width.toFloat())
+                val startY = (command.screenY?.toFloat()
+                    ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                    .coerceIn(0f, metrics.height.toFloat())
+                val endX = (command.endScreenX?.toFloat()
+                    ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                    .coerceIn(0f, metrics.width.toFloat())
+                val endY = (command.endScreenY?.toFloat()
+                    ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                    .coerceIn(0f, metrics.height.toFloat())
+                dispatchLongPressDragGesture(startX, startY, endX, endY)
+            }
+
+            RemoteAction.TOGGLE_SOFT_KEYBOARD -> toggleSoftKeyboard()
             RemoteAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
             RemoteAction.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
+            RemoteAction.RECENTS -> performGlobalAction(GLOBAL_ACTION_RECENTS)
         }
     }
 
-    private fun setFocusedText(text: String?, dismissKeyboard: Boolean): Boolean {
-        val content = text?.takeIf { it.isNotBlank() } ?: return false
-        val focusedNode = findEditableNode(rootInActiveWindow) ?: return false
-        val arguments = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, content)
+    private fun dispatchTapGesture(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 80)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    private fun dispatchSwipeGesture(startX: Float, startY: Float, endX: Float, endY: Float): Boolean {
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
         }
-        val success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-        if (success && dismissKeyboard) {
-            Handler(Looper.getMainLooper()).postDelayed({
-                performGlobalAction(GLOBAL_ACTION_BACK)
-            }, 120)
+        val stroke = GestureDescription.StrokeDescription(path, 0, 220)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    private fun dispatchLongPressDragGesture(startX: Float, startY: Float, endX: Float, endY: Float): Boolean {
+        val holdDuration = 280L
+        val dragDuration = 420L
+        val builder = GestureDescription.Builder()
+        val holdPath = Path().apply {
+            moveTo(startX, startY)
+            lineTo(startX, startY)
+        }
+        val dragPath = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+        builder.addStroke(GestureDescription.StrokeDescription(holdPath, 0, holdDuration))
+        builder.addStroke(GestureDescription.StrokeDescription(dragPath, holdDuration, dragDuration))
+        return dispatchGesture(builder.build(), null, null)
+    }
+
+    fun toggleSoftKeyboard(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return false
+        }
+        val nextMode = if (isSoftKeyboardHidden()) SHOW_MODE_AUTO else SHOW_MODE_HIDDEN
+        val success = softKeyboardController.setShowMode(nextMode)
+        if (success) {
+            softKeyboardStateListener?.invoke(nextMode == SHOW_MODE_HIDDEN)
         }
         return success
     }
 
-    private fun findEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (node == null) {
-            return null
+    fun isSoftKeyboardHidden(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return false
         }
-        if (node.isEditable && (node.isFocused || node.isAccessibilityFocused || node.isVisibleToUser)) {
-            return node
-        }
-        for (index in 0 until node.childCount) {
-            val match = findEditableNode(node.getChild(index))
-            if (match != null) {
-                return match
-            }
-        }
-        return null
+        return softKeyboardController.showMode == SHOW_MODE_HIDDEN
     }
 
-    private fun focusEditableNodeAt(x: Int, y: Int): Boolean {
+    private fun activateEditableNodeAt(x: Int, y: Int): Boolean {
         val node = findEditableNodeAt(rootInActiveWindow, x, y) ?: return false
         var success = false
+        if (node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) {
+            success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK) || success
+        }
         if (!node.isFocused) {
             success = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) || success
         }
         if (!node.isAccessibilityFocused) {
             success = node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) || success
+        }
+        val showOnScreenActionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
+        if (node.actionList.any { it.id == showOnScreenActionId }) {
+            success = node.performAction(showOnScreenActionId) || success
         }
         return success || node.isFocused || node.isAccessibilityFocused
     }
@@ -163,6 +210,9 @@ class RemoteAccessibilityService : AccessibilityService() {
 
         @Volatile
         var stateListener: ((Boolean) -> Unit)? = null
+
+        @Volatile
+        var softKeyboardStateListener: ((Boolean) -> Unit)? = null
 
         fun isEnabled(context: Context): Boolean {
             val serviceId = ComponentName(context, RemoteAccessibilityService::class.java).flattenToString()

@@ -64,6 +64,7 @@ import com.timemotion.remotehelp.core.SessionHistoryItem
 import com.timemotion.remotehelp.core.formatDateTime
 import com.timemotion.remotehelp.core.formatRemaining
 import com.timemotion.remotehelp.remote.RemoteControlUiState
+import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.ui.remote.RemoteAssistScreen
 import com.timemotion.remotehelp.ui.verification.VerificationScreen
 import com.timemotion.remotehelp.webrtc.CallUiState
@@ -83,8 +84,11 @@ fun RemoteHelpApp(
     var joinAfterPermission by remember { mutableStateOf(false) }
     var mediaPermissionsGranted by remember { mutableStateOf(false) }
     var notificationPermissionGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) }
-    var capturePromptedSessionId by remember { mutableStateOf<String?>(null) }
-    var accessibilityPromptedSessionId by remember { mutableStateOf<String?>(null) }
+    var assistPermissionPromptVisible by remember { mutableStateOf(false) }
+    var assistPermissionPromptSessionId by remember { mutableStateOf<String?>(null) }
+    var openAccessibilitySettingsAfterCaptureSessionId by remember { mutableStateOf<String?>(null) }
+    var elderControllerSeenSessionId by remember { mutableStateOf<String?>(null) }
+    var elderControllerExitHandledSessionId by remember { mutableStateOf<String?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(RequestMultiplePermissions()) { permissions ->
         mediaPermissionsGranted = permissions.values.all { it }
         if (!mediaPermissionsGranted) {
@@ -100,8 +104,16 @@ fun RemoteHelpApp(
     val projectionLauncher = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             coordinator.remoteController.startTargetCapture(result.resultCode, result.data!!)
+            if (
+                openAccessibilitySettingsAfterCaptureSessionId != null &&
+                !remoteState.targetStatus.accessibilityEnabled
+            ) {
+                openAccessibilitySettingsAfterCaptureSessionId = null
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
         } else {
             coordinator.remoteController.onCapturePermissionDenied()
+            openAccessibilitySettingsAfterCaptureSessionId = null
         }
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
@@ -197,6 +209,37 @@ fun RemoteHelpApp(
         }
     }
 
+    LaunchedEffect(
+        uiState.side,
+        uiState.currentScreen,
+        uiState.activeSession?.requestId,
+        remoteState.peers,
+        remoteState.isConnected
+    ) {
+        val sessionId = uiState.activeSession?.requestId
+        if (
+            uiState.side != DeviceSide.ELDER ||
+            uiState.currentScreen != AppScreen.ASSIST ||
+            sessionId == null
+        ) {
+            elderControllerSeenSessionId = null
+            elderControllerExitHandledSessionId = null
+            return@LaunchedEffect
+        }
+        val hasControllerPeer = remoteState.peers.any { it.role == RemoteRole.CONTROLLER }
+        if (hasControllerPeer) {
+            elderControllerSeenSessionId = sessionId
+            elderControllerExitHandledSessionId = null
+        } else if (
+            elderControllerSeenSessionId == sessionId &&
+            elderControllerExitHandledSessionId != sessionId &&
+            remoteState.isConnected
+        ) {
+            elderControllerExitHandledSessionId = sessionId
+            coordinator.onControllerLeftAssist()
+        }
+    }
+
     if (uiState.isSettingsVisible) {
         SettingsDialog(uiState, coordinator)
     }
@@ -289,60 +332,108 @@ fun RemoteHelpApp(
                     coordinator.remoteController.connect()
                 }
             }
-            LaunchedEffect(
-                uiState.activeSession?.requestId,
-                uiState.currentScreen,
-                uiState.side,
-                remoteState.targetStatus.captureActive
-            ) {
-                val sessionId = uiState.activeSession?.requestId
+            val assistSessionId = uiState.activeSession?.requestId
+            val requestAssistPermissions: () -> Unit = {
                 if (
                     uiState.currentScreen == AppScreen.ASSIST &&
                     uiState.side == DeviceSide.ELDER &&
-                    sessionId != null &&
-                    !remoteState.targetStatus.captureActive &&
-                    capturePromptedSessionId != sessionId
+                    assistSessionId != null
                 ) {
-                    capturePromptedSessionId = sessionId
-                    projectionLauncher.launch(projectionIntent)
+                    assistPermissionPromptVisible = false
+                    assistPermissionPromptSessionId = assistSessionId
+                    val needsCapture = !remoteState.targetStatus.captureActive
+                    val needsAccessibility = !remoteState.targetStatus.accessibilityEnabled
+                    if (needsCapture) {
+                        openAccessibilitySettingsAfterCaptureSessionId =
+                            if (needsAccessibility) assistSessionId else null
+                        projectionLauncher.launch(projectionIntent)
+                    } else if (needsAccessibility) {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }
+                } else {
+                    assistPermissionPromptVisible = false
                 }
             }
             LaunchedEffect(
-                uiState.activeSession?.requestId,
                 uiState.currentScreen,
                 uiState.side,
+                assistSessionId,
                 remoteState.targetStatus.captureActive,
                 remoteState.targetStatus.accessibilityEnabled
             ) {
-                val sessionId = uiState.activeSession?.requestId
                 if (
-                    uiState.currentScreen == AppScreen.ASSIST &&
-                    uiState.side == DeviceSide.ELDER &&
-                    sessionId != null &&
-                    remoteState.targetStatus.captureActive &&
-                    !remoteState.targetStatus.accessibilityEnabled &&
-                    accessibilityPromptedSessionId != sessionId
+                    uiState.currentScreen != AppScreen.ASSIST ||
+                    uiState.side != DeviceSide.ELDER ||
+                    assistSessionId == null
                 ) {
-                    accessibilityPromptedSessionId = sessionId
-                    Toast.makeText(context, "请开启无障碍服务后开始远程协助", Toast.LENGTH_LONG).show()
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    assistPermissionPromptVisible = false
+                    openAccessibilitySettingsAfterCaptureSessionId = null
+                    return@LaunchedEffect
                 }
+                val needsCapture = !remoteState.targetStatus.captureActive
+                val needsAccessibility = !remoteState.targetStatus.accessibilityEnabled
+                if (!needsCapture && !needsAccessibility) {
+                    assistPermissionPromptVisible = false
+                    openAccessibilitySettingsAfterCaptureSessionId = null
+                    return@LaunchedEffect
+                }
+                if ((needsCapture || needsAccessibility) && assistPermissionPromptSessionId != assistSessionId) {
+                    assistPermissionPromptVisible = true
+                }
+            }
+            if (assistPermissionPromptVisible && assistSessionId != null) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("开始远程协助前需要权限") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "要让对方看到并操作你的手机，需要先开启屏幕共享和无障碍服务。",
+                                color = Color(0xFF526277)
+                            )
+                            Text(
+                                text = "屏幕共享：让对方看到你的实时画面，便于远程指导。",
+                                color = Color(0xFF526277)
+                            )
+                            Text(
+                                text = "无障碍服务：让对方执行点击、滑动和拖动操作。",
+                                color = Color(0xFF526277)
+                            )
+                            Text(
+                                text = "如果不授权，对方只能看到界面，不能真正帮你操作。",
+                                color = Color(0xFF526277)
+                            )
+                            Text(
+                                text = "当前状态：屏幕共享 ${if (remoteState.targetStatus.captureActive) "已开启" else "未开启"}，无障碍服务 ${if (remoteState.targetStatus.accessibilityEnabled) "已开启" else "未开启"}",
+                                color = Color(0xFF526277)
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(onClick = requestAssistPermissions) {
+                            Text("去授权")
+                        }
+                    }
+                )
             }
             RemoteAssistScreen(
                 side = uiState.side,
                 helperName = uiState.activeSession?.helperName ?: uiState.helperName,
                 elderName = uiState.activeSession?.elderName ?: uiState.elderName,
                 uiState = remoteState,
-                onBackClick = coordinator::backToDashboard,
                 onEndClick = { coordinator.endCurrentSession() },
                 onRequestCapture = { projectionLauncher.launch(projectionIntent) },
                 onOpenAccessibilitySettings = {
                     context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 },
                 onConnectClick = coordinator.remoteController::connect,
-                onDisconnectClick = coordinator.remoteController::disconnect,
                 onFrameTap = coordinator.remoteController::sendTapCommand,
-                onFrameSwipe = coordinator.remoteController::sendSwipeCommand
+                onFrameSwipe = coordinator.remoteController::sendSwipeCommand,
+                onFrameDrag = coordinator.remoteController::sendDragCommand,
+                onSendBack = coordinator.remoteController::sendBackCommand,
+                onSendHome = coordinator.remoteController::sendHomeCommand,
+                onSendRecents = coordinator.remoteController::sendRecentsCommand,
+                onToggleSoftKeyboard = coordinator.remoteController::sendToggleSoftKeyboardCommand
             )
         }
     }

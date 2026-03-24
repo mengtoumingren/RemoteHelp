@@ -16,9 +16,11 @@ enum class RemoteRole(val wireValue: String, val title: String) {
 enum class RemoteAction {
     TAP,
     SWIPE,
-    INPUT_TEXT,
+    DRAG,
+    TOGGLE_SOFT_KEYBOARD,
     BACK,
-    HOME
+    HOME,
+    RECENTS
 }
 
 data class RemotePeer(
@@ -33,8 +35,6 @@ data class RemoteCommand(
     val normalizedY: Float? = null,
     val screenX: Int? = null,
     val screenY: Int? = null,
-    val text: String? = null,
-    val dismissKeyboard: Boolean = false,
     val endNormalizedX: Float? = null,
     val endNormalizedY: Float? = null,
     val endScreenX: Int? = null,
@@ -46,8 +46,6 @@ data class RemoteCommand(
         .put("normalizedY", normalizedY?.toDouble())
         .put("screenX", screenX)
         .put("screenY", screenY)
-        .put("text", text)
-        .put("dismissKeyboard", dismissKeyboard)
         .put("endNormalizedX", endNormalizedX?.toDouble())
         .put("endNormalizedY", endNormalizedY?.toDouble())
         .put("endScreenX", endScreenX)
@@ -60,8 +58,6 @@ data class RemoteCommand(
             normalizedY = if (json.has("normalizedY")) json.getDouble("normalizedY").toFloat() else null,
             screenX = if (json.has("screenX")) json.optInt("screenX") else null,
             screenY = if (json.has("screenY")) json.optInt("screenY") else null,
-            text = json.optString("text").takeIf { it.isNotBlank() },
-            dismissKeyboard = json.optBoolean("dismissKeyboard", false),
             endNormalizedX = if (json.has("endNormalizedX")) json.getDouble("endNormalizedX").toFloat() else null,
             endNormalizedY = if (json.has("endNormalizedY")) json.getDouble("endNormalizedY").toFloat() else null,
             endScreenX = if (json.has("endScreenX")) json.optInt("endScreenX") else null,
@@ -73,6 +69,7 @@ data class RemoteCommand(
 data class RemoteTargetStatus(
     val captureActive: Boolean = false,
     val accessibilityEnabled: Boolean = false,
+    val softKeyboardHidden: Boolean = false,
     val message: String = "等待被协助端授权",
     val screenWidth: Int = 1080,
     val screenHeight: Int = 1920
@@ -80,6 +77,7 @@ data class RemoteTargetStatus(
     fun toJson(): JSONObject = JSONObject()
         .put("captureActive", captureActive)
         .put("accessibilityEnabled", accessibilityEnabled)
+        .put("softKeyboardHidden", softKeyboardHidden)
         .put("message", message)
         .put("screenWidth", screenWidth)
         .put("screenHeight", screenHeight)
@@ -88,6 +86,7 @@ data class RemoteTargetStatus(
         fun fromJson(json: JSONObject): RemoteTargetStatus = RemoteTargetStatus(
             captureActive = json.optBoolean("captureActive"),
             accessibilityEnabled = json.optBoolean("accessibilityEnabled"),
+            softKeyboardHidden = json.optBoolean("softKeyboardHidden", false),
             message = json.optString("message"),
             screenWidth = json.optInt("screenWidth", 1080),
             screenHeight = json.optInt("screenHeight", 1920)

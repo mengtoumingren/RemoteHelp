@@ -448,7 +448,18 @@ class RemoteHelpCoordinator(
     }
 
     fun endCurrentSession(reason: String = "手动结束") {
-        finishSession(reason)
+        finishSession(
+            reason,
+            clearInviteEntry = _uiState.value.side == DeviceSide.ELDER &&
+                _uiState.value.currentScreen == AppScreen.ASSIST
+        )
+    }
+
+    fun onControllerLeftAssist() {
+        if (_uiState.value.side != DeviceSide.ELDER || _uiState.value.currentScreen != AppScreen.ASSIST) {
+            return
+        }
+        finishSession("协助方已退出远程协助")
     }
 
     fun release() {

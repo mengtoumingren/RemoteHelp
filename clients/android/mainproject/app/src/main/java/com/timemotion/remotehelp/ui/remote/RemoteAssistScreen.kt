@@ -2,6 +2,7 @@ package com.timemotion.remotehelp.ui.remote
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,10 +11,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,12 +43,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.timemotion.remotehelp.core.DeviceSide
-import com.timemotion.remotehelp.remote.RemoteCommand
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.remote.VideoRendererBinding as ControlBinding
@@ -56,14 +61,17 @@ fun RemoteAssistScreen(
     helperName: String,
     elderName: String,
     uiState: RemoteControlUiState,
-    onBackClick: () -> Unit,
     onEndClick: () -> Unit,
     onRequestCapture: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onConnectClick: () -> Unit,
-    onDisconnectClick: () -> Unit,
     onFrameTap: (Float, Float) -> Unit,
-    onFrameSwipe: (Float, Float, Float, Float) -> Unit
+    onFrameSwipe: (Float, Float, Float, Float) -> Unit,
+    onFrameDrag: (Float, Float, Float, Float) -> Unit,
+    onSendBack: () -> Unit,
+    onSendHome: () -> Unit,
+    onSendRecents: () -> Unit,
+    onToggleSoftKeyboard: () -> Unit
 ) {
     val screenAspectRatio = if (uiState.targetStatus.screenWidth > 0 && uiState.targetStatus.screenHeight > 0) {
         uiState.targetStatus.screenWidth.toFloat() / uiState.targetStatus.screenHeight.toFloat()
@@ -73,70 +81,74 @@ fun RemoteAssistScreen(
     val controllerName = uiState.peers.firstOrNull { it.role == RemoteRole.CONTROLLER }?.displayName ?: helperName
     var isMoreMenuVisible by remember { mutableStateOf(false) }
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(Color(0xFFFFFBF4), Color(0xFFF0E7D7), Color(0xFFE4EDF6))))
-                .systemBarsPadding()
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            CardBlock(contentPadding = 10.dp) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (side == DeviceSide.HELPER) "正在协助：$elderName" else "正在协助：$helperName",
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF183153)
-                    )
-                    if (side == DeviceSide.HELPER) {
-                        Box {
-                            OutlinedButton(
-                                onClick = { isMoreMenuVisible = true },
-                                modifier = Modifier.size(width = 58.dp, height = 34.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF183153))
-                            ) {
-                                Text("更多")
-                            }
-                            DropdownMenu(
-                                expanded = isMoreMenuVisible,
-                                onDismissRequest = { isMoreMenuVisible = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("返回首页") },
-                                    onClick = {
-                                        isMoreMenuVisible = false
-                                        onBackClick()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("结束协助") },
-                                    onClick = {
-                                        isMoreMenuVisible = false
-                                        onEndClick()
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (side == DeviceSide.HELPER) {
+        if (side == DeviceSide.HELPER) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Color(0xFF0E1724), Color(0xFF17283B), Color(0xFF23384D))))
+                    .systemBarsPadding()
+            ) {
                 HelperAssistBody(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = true),
+                    modifier = Modifier.fillMaxSize(),
                     screenRenderer = uiState.remoteRenderer,
                     screenAspectRatio = screenAspectRatio,
                     onFrameTap = onFrameTap,
-                    onFrameSwipe = onFrameSwipe
+                    onFrameSwipe = onFrameSwipe,
+                    onFrameDrag = onFrameDrag
                 )
-            } else {
+                AssistTopOverlay(
+                    title = "正在协助：$elderName",
+                    subtitle = uiState.targetStatus.message,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                )
+                HelperAssistBottomBar(
+                    onSendBack = onSendBack,
+                    onSendHome = onSendHome,
+                    onSendRecents = onSendRecents,
+                    onToggleKeyboard = onToggleSoftKeyboard,
+                    isKeyboardActive = !uiState.targetStatus.softKeyboardHidden,
+                    onOpenMore = { isMoreMenuVisible = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 54.dp)
+                ) {
+                    DropdownMenu(
+                        expanded = isMoreMenuVisible,
+                        onDismissRequest = { isMoreMenuVisible = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("结束协助") },
+                            onClick = {
+                                isMoreMenuVisible = false
+                                onEndClick()
+                            }
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Color(0xFFFFFBF4), Color(0xFFF0E7D7), Color(0xFFE4EDF6))))
+                    .systemBarsPadding()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                CardBlock(contentPadding = 10.dp) {
+                    Text(
+                        text = "正在协助：$helperName",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF183153)
+                    )
+                }
                 ElderAssistBody(
                     controllerName = controllerName,
                     targetStatus = uiState.targetStatus.message,
@@ -146,7 +158,6 @@ fun RemoteAssistScreen(
                     onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                     isConnected = uiState.isConnected,
                     onConnectClick = onConnectClick,
-                    onDisconnectClick = onDisconnectClick,
                     onEndClick = onEndClick
                 )
             }
@@ -160,37 +171,150 @@ private fun HelperAssistBody(
     screenRenderer: ControlBinding?,
     screenAspectRatio: Float,
     onFrameTap: (Float, Float) -> Unit,
-    onFrameSwipe: (Float, Float, Float, Float) -> Unit
+    onFrameSwipe: (Float, Float, Float, Float) -> Unit,
+    onFrameDrag: (Float, Float, Float, Float) -> Unit
 ) {
-    CardBlock(modifier = modifier, contentPadding = 8.dp) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .padding(horizontal = 4.dp),
             contentAlignment = Alignment.Center
         ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
                     .fillMaxSize()
-                    .padding(bottom = 10.dp),
-                contentAlignment = Alignment.Center
+                    .aspectRatio(screenAspectRatio, matchHeightConstraintsFirst = true)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(screenAspectRatio, matchHeightConstraintsFirst = true)
-                ) {
-                    ControlRendererPanel(
-                        renderer = screenRenderer,
-                        placeholder = "等待对方屏幕画面",
-                        aspectRatio = screenAspectRatio,
-                        modifier = Modifier.matchParentSize(),
-                        allowTouch = true,
-                        onFrameTap = onFrameTap,
-                        onFrameSwipe = onFrameSwipe
-                    )
-                }
+                ControlRendererPanel(
+                    renderer = screenRenderer,
+                    placeholder = "等待对方屏幕画面",
+                    aspectRatio = screenAspectRatio,
+                    modifier = Modifier.fillMaxSize(),
+                    allowTouch = true,
+                    onFrameTap = onFrameTap,
+                    onFrameSwipe = onFrameSwipe,
+                    onFrameDrag = onFrameDrag
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun AssistTopOverlay(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color(0xCC07111C), Color(0x7007111C), Color.Transparent)
+                )
+            )
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                color = Color(0xFFD6E1EA),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun HelperAssistBottomBar(
+    onSendBack: () -> Unit,
+    onSendHome: () -> Unit,
+    onSendRecents: () -> Unit,
+    onToggleKeyboard: () -> Unit,
+    isKeyboardActive: Boolean,
+    onOpenMore: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(Color(0xAA122030)),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val itemWidth = 56.dp
+            AssistFloatingButton(
+                title = "返回",
+                onClick = onSendBack,
+                modifier = Modifier.width(itemWidth)
+            )
+            AssistFloatingButton(
+                title = "桌面",
+                onClick = onSendHome,
+                modifier = Modifier.width(itemWidth)
+            )
+            AssistFloatingButton(
+                title = "菜单",
+                onClick = onSendRecents,
+                modifier = Modifier.width(itemWidth)
+            )
+            AssistFloatingButton(
+                title = "键盘",
+                onClick = onToggleKeyboard,
+                active = isKeyboardActive,
+                modifier = Modifier.width(itemWidth)
+            )
+            OutlinedButton(
+                onClick = onOpenMore,
+                modifier = Modifier.width(itemWidth),
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color(0x22324458),
+                    contentColor = Color(0xFFE8EFF6)
+                )
+            ) {
+                Text("更多")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistFloatingButton(
+    title: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) Color(0xFF7189A6) else Color(0x2CFFFFFF),
+            contentColor = Color.White
+        )
+    ) {
+        Text(title)
     }
 }
 
@@ -204,35 +328,104 @@ private fun ElderAssistBody(
     onOpenAccessibilitySettings: () -> Unit,
     isConnected: Boolean,
     onConnectClick: () -> Unit,
-    onDisconnectClick: () -> Unit,
     onEndClick: () -> Unit
 ) {
-    CardBlock {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("正在接受远程协助", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
-            Text("当前协助人：$controllerName", color = Color(0xFF526277))
-            Text("通知栏会显示当前正在协助您的人，误触退出后也可以从通知栏确认状态。", color = Color(0xFF526277))
-            Text(targetStatus, color = Color(0xFF526277))
-            Text("屏幕共享：${if (captureActive) "已开启" else "未开启"}", color = Color(0xFF526277))
-            Text("无障碍服务：${if (accessibilityEnabled) "已开启" else "未开启"}", color = Color(0xFF526277))
-            Text("请保持当前页面开启；完成屏幕采集和无障碍授权后，“我要协助”一侧即可继续操作。", color = Color(0xFF526277))
-            if (!isConnected) {
-                Button(onClick = onConnectClick, modifier = Modifier.fillMaxWidth()) {
-                    Text("连接协助通道")
-                }
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.verticalScroll(rememberScrollState())
+    ) {
+        CardBlock {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("正在接受远程协助", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
+                Text("当前协助人：$controllerName", color = Color(0xFF526277))
+                Text("通知栏会显示当前正在协助您的人，误触退出后也可以从通知栏确认状态。", color = Color(0xFF526277))
+                Text(targetStatus, color = Color(0xFF526277))
+            }
+        }
+        PermissionStatusCard(
+            title = "屏幕共享",
+            status = if (captureActive) "已开启" else "未开启",
+            description = if (captureActive) {
+                "对方已经能看到你的屏幕，接下来可以继续远程操作。"
             } else {
-                OutlinedButton(onClick = onDisconnectClick, modifier = Modifier.fillMaxWidth()) {
-                    Text("断开协助通道")
+                "对方需要先看到你的实时画面，才能判断位置、路径和下一步操作。"
+            },
+            buttonText = if (captureActive) "重新授权" else "授权屏幕采集",
+            onClick = onRequestCapture
+        )
+        PermissionStatusCard(
+            title = "无障碍服务",
+            status = if (accessibilityEnabled) "已开启" else "未开启",
+            description = if (accessibilityEnabled) {
+                "开启后对方才能替你点击、滑动和拖动。"
+            } else {
+                "这是让对方真正执行远程操作的关键权限，不开启就只能看画面。"
+            },
+            buttonText = if (accessibilityEnabled) "前往设置" else "开启无障碍服务",
+            onClick = onOpenAccessibilitySettings
+        )
+        CardBlock {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("协助通道", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
+                Text(
+                    text = if (isConnected) "协助通道已连接，完成上面的权限后就可以继续。" else "协助通道未连接，先连接后再开启权限。",
+                    color = Color(0xFF526277)
+                )
+                if (!isConnected) {
+                    Button(
+                        onClick = onConnectClick,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF183153),
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text("连接协助通道")
+                    }
+                }
+                OutlinedButton(
+                    onClick = onEndClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = Color(0xFF183153)
+                    )
+                ) {
+                    Text("结束本次协助")
                 }
             }
-            OutlinedButton(onClick = onRequestCapture, modifier = Modifier.fillMaxWidth()) {
-                Text("授权屏幕采集")
+        }
+    }
+}
+
+@Composable
+private fun PermissionStatusCard(
+    title: String,
+    status: String,
+    description: String,
+    buttonText: String,
+    onClick: () -> Unit
+) {
+    CardBlock {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(title, fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
+                Text(status, fontWeight = FontWeight.Medium, color = Color(0xFF526277))
             }
-            OutlinedButton(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
-                Text("开启无障碍服务")
-            }
-            OutlinedButton(onClick = onEndClick, modifier = Modifier.fillMaxWidth()) {
-                Text("结束本次协助")
+            Text(description, color = Color(0xFF526277))
+            OutlinedButton(
+                onClick = onClick,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = Color(0xFF183153)
+                )
+            ) {
+                Text(buttonText)
             }
         }
     }
@@ -279,7 +472,8 @@ private fun ControlRendererPanel(
     modifier: Modifier,
     allowTouch: Boolean,
     onFrameTap: (Float, Float) -> Unit,
-    onFrameSwipe: (Float, Float, Float, Float) -> Unit
+    onFrameSwipe: (Float, Float, Float, Float) -> Unit,
+    onFrameDrag: (Float, Float, Float, Float) -> Unit
 ) {
     if (renderer == null) {
         Box(
@@ -300,6 +494,8 @@ private fun ControlRendererPanel(
         }
     }
     var size by remember { mutableStateOf(IntSize.Zero) }
+    var dragStart by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var dragEnd by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var swipeStart by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var swipeEnd by remember { mutableStateOf<Pair<Float, Float>?>(null) }
 
@@ -316,12 +512,37 @@ private fun ControlRendererPanel(
                 if (allowTouch) {
                     Modifier
                         .pointerInput(renderer, size) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { offset ->
+                                    dragStart = calculateContentRect(size, aspectRatio)?.normalize(offset)
+                                    dragEnd = dragStart
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    dragEnd = calculateContentRect(size, aspectRatio)?.normalize(change.position)
+                                },
+                                onDragEnd = {
+                                    val start = dragStart
+                                    val end = dragEnd
+                                    dragStart = null
+                                    dragEnd = null
+                                    if (start != null && end != null) {
+                                        onFrameDrag(start.first, start.second, end.first, end.second)
+                                    }
+                                },
+                                onDragCancel = {
+                                    dragStart = null
+                                    dragEnd = null
+                                }
+                            )
+                        }
+                        .pointerInput(renderer, size) {
                             detectDragGestures(
                                 onDragStart = { offset ->
                                     swipeStart = calculateContentRect(size, aspectRatio)?.normalize(offset)
                                     swipeEnd = swipeStart
                                 },
-                                onDrag = { change, dragAmount ->
+                                onDrag = { change, _ ->
                                     change.consume()
                                     swipeEnd = calculateContentRect(size, aspectRatio)?.normalize(change.position)
                                 },

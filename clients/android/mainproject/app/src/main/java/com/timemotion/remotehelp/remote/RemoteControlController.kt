@@ -65,6 +65,9 @@ class RemoteControlController(
         RemoteAccessibilityService.stateListener = { enabled ->
             mainHandler.post { onAccessibilityAvailabilityChanged(enabled) }
         }
+        RemoteAccessibilityService.softKeyboardStateListener = { hidden ->
+            mainHandler.post { onSoftKeyboardModeChanged(hidden) }
+        }
         ScreenCaptureForegroundService.statusListener = ::onForegroundServiceChanged
         ScreenCaptureForegroundService.messageListener = ::pushStatus
     }
@@ -113,6 +116,7 @@ class RemoteControlController(
             _uiState.value.targetStatus.copy(
                 captureActive = false,
                 accessibilityEnabled = isAccessibilityEnabled(),
+                softKeyboardHidden = isSoftKeyboardHidden(),
                 message = "等待重新连接"
             )
         )
@@ -123,6 +127,7 @@ class RemoteControlController(
             _uiState.value.targetStatus.copy(
                 captureActive = false,
                 accessibilityEnabled = isAccessibilityEnabled(),
+                softKeyboardHidden = isSoftKeyboardHidden(),
                 message = "屏幕采集授权被拒绝"
             )
         )
@@ -141,6 +146,7 @@ class RemoteControlController(
                 _uiState.value.targetStatus.copy(
                     captureActive = true,
                     accessibilityEnabled = isAccessibilityEnabled(),
+                    softKeyboardHidden = isSoftKeyboardHidden(),
                     message = if (isAccessibilityEnabled()) "屏幕流已启动，可接受远程协助" else "屏幕流已启动，请开启无障碍服务",
                     screenWidth = captureProfile.screenWidth,
                     screenHeight = captureProfile.screenHeight
@@ -198,11 +204,51 @@ class RemoteControlController(
         )
     }
 
+    fun sendDragCommand(
+        startNormalizedX: Float,
+        startNormalizedY: Float,
+        endNormalizedX: Float,
+        endNormalizedY: Float
+    ) {
+        val screenWidth = _uiState.value.targetStatus.screenWidth.coerceAtLeast(1)
+        val screenHeight = _uiState.value.targetStatus.screenHeight.coerceAtLeast(1)
+        sendCommand(
+            RemoteCommand(
+                action = RemoteAction.DRAG,
+                normalizedX = startNormalizedX,
+                normalizedY = startNormalizedY,
+                screenX = (startNormalizedX * screenWidth).toInt().coerceIn(0, screenWidth),
+                screenY = (startNormalizedY * screenHeight).toInt().coerceIn(0, screenHeight),
+                endNormalizedX = endNormalizedX,
+                endNormalizedY = endNormalizedY,
+                endScreenX = (endNormalizedX * screenWidth).toInt().coerceIn(0, screenWidth),
+                endScreenY = (endNormalizedY * screenHeight).toInt().coerceIn(0, screenHeight)
+            )
+        )
+    }
+
+    fun sendBackCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.BACK))
+    }
+
+    fun sendHomeCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.HOME))
+    }
+
+    fun sendRecentsCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.RECENTS))
+    }
+
+    fun sendToggleSoftKeyboardCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.TOGGLE_SOFT_KEYBOARD))
+    }
+
     fun refreshLocalCapabilities() {
         val captureProfile = currentCaptureProfile()
         updateTargetStatus(
             _uiState.value.targetStatus.copy(
                 accessibilityEnabled = isAccessibilityEnabled(),
+                softKeyboardHidden = isSoftKeyboardHidden(),
                 message = when {
                     _uiState.value.selectedRole != RemoteRole.TARGET -> _uiState.value.targetStatus.message
                     _uiState.value.targetStatus.captureActive && isAccessibilityEnabled() -> "屏幕流已就绪，可接受远控"
@@ -218,6 +264,7 @@ class RemoteControlController(
     fun release() {
         disconnect()
         RemoteAccessibilityService.stateListener = null
+        RemoteAccessibilityService.softKeyboardStateListener = null
         ScreenCaptureForegroundService.statusListener = null
         ScreenCaptureForegroundService.messageListener = null
         peerConnectionFactory.dispose()
@@ -239,6 +286,7 @@ class RemoteControlController(
                             _uiState.value.targetStatus.copy(
                                 captureActive = false,
                                 accessibilityEnabled = isAccessibilityEnabled(),
+                                softKeyboardHidden = isSoftKeyboardHidden(),
                                 message = "系统停止了屏幕采集"
                             )
                         )
@@ -486,6 +534,7 @@ class RemoteControlController(
                         updateTargetStatus(
                             _uiState.value.targetStatus.copy(
                                 accessibilityEnabled = false,
+                                softKeyboardHidden = isSoftKeyboardHidden(),
                                 message = "未开启无障碍服务，无法执行远控指令"
                             )
                         )
@@ -493,10 +542,19 @@ class RemoteControlController(
                         return@post
                     }
                     val success = accessibility.execute(event.command)
+                    val softKeyboardHidden = accessibility.isSoftKeyboardHidden()
                     updateTargetStatus(
                         _uiState.value.targetStatus.copy(
                             accessibilityEnabled = true,
-                            message = if (success) "${event.fromDisplayName} 已执行 ${event.command.action.name}" else "远控指令执行失败"
+                            softKeyboardHidden = softKeyboardHidden,
+                            message = when {
+                                !success -> "远控指令执行失败"
+                                event.command.action == RemoteAction.TOGGLE_SOFT_KEYBOARD && softKeyboardHidden ->
+                                    "${event.fromDisplayName} 已收起远端软键盘"
+                                event.command.action == RemoteAction.TOGGLE_SOFT_KEYBOARD ->
+                                    "${event.fromDisplayName} 已允许远端软键盘弹出"
+                                else -> "${event.fromDisplayName} 已执行 ${event.command.action.name}"
+                            }
                         )
                     )
                     appendLog("${event.fromDisplayName} -> ${event.command.action.name}")
@@ -529,6 +587,7 @@ class RemoteControlController(
                 _uiState.value.targetStatus.copy(
                     captureActive = active || localScreenTrack != null,
                     accessibilityEnabled = isAccessibilityEnabled(),
+                    softKeyboardHidden = isSoftKeyboardHidden(),
                     message = if (active || localScreenTrack != null) "前台投屏服务已启动" else "前台投屏服务已关闭"
                 )
             )
@@ -567,6 +626,7 @@ class RemoteControlController(
     private fun publishTargetStatus() {
         val status = _uiState.value.targetStatus.copy(
             accessibilityEnabled = isAccessibilityEnabled(),
+            softKeyboardHidden = isSoftKeyboardHidden(),
             captureActive = localScreenTrack != null
         )
         signalClient.sendTargetStatus(status)
@@ -580,6 +640,7 @@ class RemoteControlController(
     }
 
     private fun isAccessibilityEnabled(): Boolean = RemoteAccessibilityService.isEnabled(appContext)
+    private fun isSoftKeyboardHidden(): Boolean = RemoteAccessibilityService.instance?.isSoftKeyboardHidden() ?: false
 
     private fun onAccessibilityAvailabilityChanged(enabled: Boolean) {
         val current = _uiState.value.targetStatus
@@ -593,9 +654,15 @@ class RemoteControlController(
         updateTargetStatus(
             current.copy(
                 accessibilityEnabled = enabled,
+                softKeyboardHidden = isSoftKeyboardHidden(),
                 message = message
             )
         )
+    }
+
+    private fun onSoftKeyboardModeChanged(hidden: Boolean) {
+        val current = _uiState.value.targetStatus
+        updateTargetStatus(current.copy(softKeyboardHidden = hidden))
     }
 
     private fun currentNotificationText(): String {
