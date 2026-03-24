@@ -14,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts.RequestPermissi
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -81,6 +83,7 @@ import com.timemotion.remotehelp.ui.verification.VerificationScreen
 import com.timemotion.remotehelp.webrtc.CallUiState
 import com.timemotion.remotehelp.webrtc.VideoRendererBinding
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
@@ -136,6 +139,11 @@ fun RemoteHelpApp(
             Toast.makeText(context, "未授予通知权限时，通知栏可能无法显示常驻协助通知", Toast.LENGTH_LONG).show()
         }
     }
+    LaunchedEffect(Unit) {
+        UiFeedbackBus.topToasts.collect { message ->
+            showTopToast(context, message)
+        }
+    }
 
     LaunchedEffect(
         uiState.currentScreen,
@@ -180,6 +188,22 @@ fun RemoteHelpApp(
                     coordinator.callController.joinRoom(prepareLocalMedia = false)
                 }
             }
+        }
+    }
+
+    LaunchedEffect(
+        uiState.currentScreen,
+        uiState.side,
+        uiState.activeSession?.requestId,
+        uiState.activeSession?.expiresAt
+    ) {
+        val session = uiState.activeSession ?: return@LaunchedEffect
+        if (
+            uiState.side == DeviceSide.HELPER &&
+            uiState.currentScreen == AppScreen.SESSION &&
+            session.isExpired()
+        ) {
+            coordinator.endCurrentSession("短信链接已过期，请重新发起协助")
         }
     }
 
@@ -672,7 +696,7 @@ private fun TopHero(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SideButton("我要协助", uiState.side == DeviceSide.HELPER) {
+                SideButton("我来协助", uiState.side == DeviceSide.HELPER) {
                     coordinator.switchSide(DeviceSide.HELPER)
                 }
                 SideButton("需要协助", uiState.side == DeviceSide.ELDER) {
@@ -719,6 +743,7 @@ private fun ElderHome(
     uiState: RemoteHelpUiState,
     coordinator: RemoteHelpCoordinator
 ) {
+    val context = LocalContext.current
     ProductCard {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -733,11 +758,44 @@ private fun ElderHome(
                 label = { Text("粘贴短信链接") },
                 modifier = Modifier.fillMaxWidth()
             )
-            Button(
-                onClick = { coordinator.consumeInvite(uiState.inviteEntry) },
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("查看协助信息")
+                OutlinedButton(
+                    onClick = {
+                        coordinator.updateInviteEntry("")
+                        val clipboardManager = context.getSystemService(android.content.ClipboardManager::class.java)
+                        val pastedText = clipboardManager?.primaryClip
+                            ?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)
+                            ?.coerceToText(context)
+                            ?.toString()
+                            ?.trim()
+                            .orEmpty()
+                        if (pastedText.isBlank()) {
+                            Toast.makeText(context, "剪切板中没有可用链接", Toast.LENGTH_SHORT).show()
+                            return@OutlinedButton
+                        }
+                        coordinator.updateInviteEntry(pastedText)
+                    },
+                    modifier = Modifier
+                        .widthIn(min = 84.dp, max = 96.dp),
+                    shape = ButtonDefaults.shape,
+                    border = BorderStroke(1.dp, Color(0xFFD4DCE6)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF6E7B8B)
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text("粘贴链接")
+                }
+                Button(
+                    onClick = { coordinator.consumeInvite(uiState.inviteEntry) },
+                    modifier = Modifier.widthIn(min = 168.dp)
+                ) {
+                    Text("查看协助信息")
+                }
             }
         }
     }
@@ -877,7 +935,7 @@ private fun RecentContactsCard(
 
 @Composable
 private fun HistoryCard(history: List<SessionHistoryItem>) {
-    ProductCard {
+    ProductCard(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(text = "最近协助记录", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
             if (history.isEmpty()) {
@@ -917,9 +975,15 @@ private fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    text = "提示：`ws://10.0.2.2:3000/ws` 只适用于 Android 模拟器。真机联调请改成宿主机局域网 IP，例如 `ws://192.168.2.109:3000/ws`。",
+                    text = "提示：`ws://192.168.2.109:3000/ws` 只适用于 Android 模拟器。真机联调请改成宿主机局域网 IP，例如 `ws://192.168.2.109:3000/ws`。",
                     color = Color(0xFF526277)
                 )
+                OutlinedButton(
+                    onClick = coordinator::openLogsDirectory,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("查看日志目录")
+                }
             }
         },
         confirmButton = {
@@ -998,8 +1062,12 @@ private fun LinkPreviewLine(label: String, value: String) {
 }
 
 @Composable
-private fun ProductCard(content: @Composable () -> Unit) {
+private fun ProductCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
     Card(
+        modifier = modifier,
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFCF8))
     ) {

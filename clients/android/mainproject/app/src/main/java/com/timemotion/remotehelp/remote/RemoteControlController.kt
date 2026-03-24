@@ -27,10 +27,18 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import kotlin.math.roundToInt
+import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.ui.UiFeedbackBus
 
 class RemoteControlController(
     context: Context
 ) {
+    companion object {
+        private const val MAX_RTC_RECONNECT_ATTEMPTS = 4
+        private const val BASE_RTC_RECONNECT_DELAY_MS = 1000L
+        private const val MAX_RTC_RECONNECT_DELAY_MS = 10_000L
+    }
+
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val eglBase = EglBase.create()
@@ -48,6 +56,9 @@ class RemoteControlController(
     private var remoteVideoTrack: VideoTrack? = null
     private var localVideoSender: RtpSender? = null
     private var isMakingOffer = false
+    private var allowRtcReconnect = false
+    private var rtcReconnectAttempt = 0
+    private var rtcReconnectRunnable: Runnable? = null
 
     private val _uiState = MutableStateFlow(RemoteControlUiState())
     val uiState: StateFlow<RemoteControlUiState> = _uiState.asStateFlow()
@@ -94,6 +105,9 @@ class RemoteControlController(
             pushStatus("请填写服务地址和房间号")
             return
         }
+        allowRtcReconnect = true
+        cancelRtcReconnect()
+        rtcReconnectAttempt = 0
         pushStatus("连接中")
         signalClient.connect(
             url = state.serverUrl.trim(),
@@ -104,6 +118,8 @@ class RemoteControlController(
     }
 
     fun disconnect() {
+        allowRtcReconnect = false
+        cancelRtcReconnect()
         stopScreenShare()
         clearPeerConnection()
         signalClient.disconnect()
@@ -258,6 +274,8 @@ class RemoteControlController(
     }
 
     fun release() {
+        allowRtcReconnect = false
+        cancelRtcReconnect()
         disconnect()
         RemoteAccessibilityService.stateListener = null
         RemoteAccessibilityService.softKeyboardStateListener = null
@@ -334,6 +352,16 @@ class RemoteControlController(
             object : PeerConnection.Observer {
                 override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                    if (state == PeerConnection.IceConnectionState.CONNECTED ||
+                        state == PeerConnection.IceConnectionState.COMPLETED
+                    ) {
+                        cancelRtcReconnect()
+                    }
+                    if (state == PeerConnection.IceConnectionState.FAILED ||
+                        state == PeerConnection.IceConnectionState.CLOSED
+                    ) {
+                        handleRtcConnectionLost("ICE: $state")
+                    }
                     pushStatus("ICE: $state")
                 }
                 override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
@@ -460,7 +488,11 @@ class RemoteControlController(
         pendingRemoteIce.clear()
     }
 
-    private fun clearPeerConnection() {
+    private fun clearPeerConnection(resetRtcRetryState: Boolean = true) {
+        if (resetRtcRetryState) {
+            cancelRtcReconnect()
+            rtcReconnectAttempt = 0
+        }
         remoteVideoTrack = null
         localVideoSender = null
         pendingRemoteIce.clear()
@@ -470,6 +502,51 @@ class RemoteControlController(
         peerConnection = null
         publishRendererBindings()
     }
+
+    private fun handleRtcConnectionLost(status: String) {
+        if (!allowRtcReconnect || _uiState.value.selectedRole != RemoteRole.TARGET || !isConnected() || !hasControllerPeer()) {
+            clearPeerConnection()
+            return
+        }
+        cancelRtcReconnect()
+        clearPeerConnection(resetRtcRetryState = false)
+        scheduleRtcReconnect(status)
+    }
+
+    private fun scheduleRtcReconnect(message: String) {
+        if (!allowRtcReconnect || _uiState.value.selectedRole != RemoteRole.TARGET || !isConnected() || !hasControllerPeer()) {
+            clearPeerConnection()
+            return
+        }
+        if (rtcReconnectAttempt >= MAX_RTC_RECONNECT_ATTEMPTS) {
+            clearPeerConnection()
+            pushStatus("RTC 重连失败: $message")
+            UiFeedbackBus.emitTopToast("远控画面重连失败，请检查网络后重试")
+            return
+        }
+        val delayMs = (BASE_RTC_RECONNECT_DELAY_MS shl rtcReconnectAttempt).coerceAtMost(MAX_RTC_RECONNECT_DELAY_MS)
+        rtcReconnectAttempt += 1
+        pushStatus("RTC 断开，${delayMs / 1000}s 后重连")
+        if (rtcReconnectAttempt == 1) {
+            UiFeedbackBus.emitTopToast("网络异常，远控画面正在重连")
+        }
+        cancelRtcReconnect()
+        rtcReconnectRunnable = Runnable {
+            if (!allowRtcReconnect || _uiState.value.selectedRole != RemoteRole.TARGET || !isConnected() || !hasControllerPeer()) {
+                return@Runnable
+            }
+            maybeStartStreamingOffer()
+        }
+        mainHandler.postDelayed(rtcReconnectRunnable!!, delayMs)
+    }
+
+    private fun cancelRtcReconnect() {
+        rtcReconnectRunnable?.let(mainHandler::removeCallbacks)
+        rtcReconnectRunnable = null
+        rtcReconnectAttempt = 0
+    }
+
+    private fun isConnected(): Boolean = _uiState.value.isConnected
 
     private fun publishRendererBindings() {
         val localBinding = localScreenTrack?.let { track ->
@@ -493,82 +570,93 @@ class RemoteControlController(
 
     private fun onSignalEvent(event: RemoteSignalEvent) {
         mainHandler.post {
-            when (event) {
-                is RemoteSignalEvent.Connected -> pushStatus("已连上服务")
-                is RemoteSignalEvent.Joined -> {
-                    _uiState.value = _uiState.value.copy(
-                        isConnected = true,
-                        peers = event.peers,
-                        targetStatus = event.targetStatus ?: _uiState.value.targetStatus,
-                        status = "已加入房间"
-                    )
-                    appendLog("加入房间成功")
-                    if (_uiState.value.selectedRole == RemoteRole.TARGET) {
-                        refreshForegroundNotification()
-                        publishTargetStatus()
-                        maybeStartStreamingOffer()
+            runCatching {
+                when (event) {
+                    is RemoteSignalEvent.Connected -> pushStatus("已连上服务")
+                    is RemoteSignalEvent.Reconnecting -> {
+                        _uiState.value = _uiState.value.copy(isConnected = true)
+                        pushStatus("${event.message}，${event.delayMs / 1000}s 后重连（${event.attempt}/6）")
                     }
-                }
-                is RemoteSignalEvent.PeerUpdate -> {
-                    _uiState.value = _uiState.value.copy(peers = event.peers)
-                    appendLog("成员更新: ${event.peers.joinToString { "${it.displayName}-${it.role.title}" }}")
-                    if (_uiState.value.selectedRole == RemoteRole.TARGET) {
-                        refreshForegroundNotification()
-                        maybeStartStreamingOffer()
-                    } else if (!hasTargetPeer()) {
-                        clearPeerConnection()
+                    is RemoteSignalEvent.Joined -> {
+                        _uiState.value = _uiState.value.copy(
+                            isConnected = true,
+                            peers = event.peers,
+                            targetStatus = event.targetStatus ?: _uiState.value.targetStatus,
+                            status = "已加入房间"
+                        )
+                        appendLog("加入房间成功")
+                        if (_uiState.value.selectedRole == RemoteRole.TARGET) {
+                            refreshForegroundNotification()
+                            publishTargetStatus()
+                            maybeStartStreamingOffer()
+                        }
                     }
-                }
-                is RemoteSignalEvent.TargetStatusReceived -> {
-                    _uiState.value = _uiState.value.copy(targetStatus = event.status)
-                }
-                is RemoteSignalEvent.CommandReceived -> {
-                    if (_uiState.value.selectedRole != RemoteRole.TARGET) return@post
-                    appendLog("收到 ${event.fromDisplayName} 的 ${event.command.action.name}")
-                    val accessibility = RemoteAccessibilityService.instance
-                    if (accessibility == null) {
+                    is RemoteSignalEvent.PeerUpdate -> {
+                        _uiState.value = _uiState.value.copy(peers = event.peers)
+                        appendLog("成员更新: ${event.peers.joinToString { "${it.displayName}-${it.role.title}" }}")
+                        if (_uiState.value.selectedRole == RemoteRole.TARGET) {
+                            refreshForegroundNotification()
+                            maybeStartStreamingOffer()
+                        } else if (!hasTargetPeer()) {
+                            clearPeerConnection()
+                        }
+                    }
+                    is RemoteSignalEvent.TargetStatusReceived -> {
+                        _uiState.value = _uiState.value.copy(targetStatus = event.status)
+                    }
+                    is RemoteSignalEvent.CommandReceived -> {
+                        if (_uiState.value.selectedRole != RemoteRole.TARGET) return@post
+                        appendLog("收到 ${event.fromDisplayName} 的 ${event.command.action.name}")
+                        val accessibility = RemoteAccessibilityService.instance
+                        if (accessibility == null) {
+                            updateTargetStatus(
+                                _uiState.value.targetStatus.copy(
+                                    accessibilityEnabled = false,
+                                    softKeyboardHidden = isSoftKeyboardHidden(),
+                                    message = "未开启无障碍服务，无法执行远控指令"
+                                )
+                            )
+                            appendLog("无障碍服务未开启，命令未执行")
+                            return@post
+                        }
+                        val success = accessibility.execute(event.command)
+                        val softKeyboardHidden = accessibility.isSoftKeyboardHidden()
                         updateTargetStatus(
                             _uiState.value.targetStatus.copy(
-                                accessibilityEnabled = false,
-                                softKeyboardHidden = isSoftKeyboardHidden(),
-                                message = "未开启无障碍服务，无法执行远控指令"
+                                accessibilityEnabled = true,
+                                softKeyboardHidden = softKeyboardHidden,
+                                message = when {
+                                    !success -> "远控指令执行失败"
+                                    else -> "${event.fromDisplayName} 已执行 ${event.command.action.name}"
+                                }
                             )
                         )
-                        appendLog("无障碍服务未开启，命令未执行")
-                        return@post
+                        appendLog("${event.fromDisplayName} -> ${event.command.action.name}")
                     }
-                    val success = accessibility.execute(event.command)
-                    val softKeyboardHidden = accessibility.isSoftKeyboardHidden()
-                    updateTargetStatus(
-                        _uiState.value.targetStatus.copy(
-                            accessibilityEnabled = true,
-                            softKeyboardHidden = softKeyboardHidden,
-                            message = when {
-                                !success -> "远控指令执行失败"
-                                else -> "${event.fromDisplayName} 已执行 ${event.command.action.name}"
-                            }
+                    is RemoteSignalEvent.SignalReceived -> {
+                        when (event.signalType) {
+                            "offer" -> handleOffer(event.payload)
+                            "answer" -> handleAnswer(event.payload)
+                            "candidate" -> handleCandidate(event.payload)
+                        }
+                    }
+                    is RemoteSignalEvent.Error -> pushStatus(event.message)
+                    is RemoteSignalEvent.Disconnected -> {
+                        cancelRtcReconnect()
+                        allowRtcReconnect = false
+                        clearPeerConnection()
+                        _uiState.value = _uiState.value.copy(
+                            isConnected = false,
+                            peers = emptyList(),
+                            status = "连接关闭"
                         )
-                    )
-                    appendLog("${event.fromDisplayName} -> ${event.command.action.name}")
-                }
-                is RemoteSignalEvent.SignalReceived -> {
-                    when (event.signalType) {
-                        "offer" -> handleOffer(event.payload)
-                        "answer" -> handleAnswer(event.payload)
-                        "candidate" -> handleCandidate(event.payload)
+                        appendLog("连接已关闭")
+                        refreshForegroundNotification()
                     }
                 }
-                is RemoteSignalEvent.Error -> pushStatus(event.message)
-                is RemoteSignalEvent.Disconnected -> {
-                    clearPeerConnection()
-                    _uiState.value = _uiState.value.copy(
-                        isConnected = false,
-                        peers = emptyList(),
-                        status = "连接关闭"
-                    )
-                    appendLog("连接已关闭")
-                    refreshForegroundNotification()
-                }
+            }.onFailure {
+                AppLog.logThrowable("RemoteControlController", it, "处理远控信令事件失败: ${event::class.simpleName}")
+                pushStatus("远控处理异常，请重试")
             }
         }
     }

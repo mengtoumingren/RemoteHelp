@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.core.RemoteHelpCoordinator
 import com.timemotion.remotehelp.ui.RemoteHelpApp
 import com.timemotion.remotehelp.ui.theme.RemotehelpTheme
@@ -20,6 +21,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.install(applicationContext)
         coordinator = RemoteHelpCoordinator(applicationContext)
         projectionManager = getSystemService(MediaProjectionManager::class.java)
         queueDeepLink(intent)

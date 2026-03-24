@@ -15,6 +15,9 @@ class RemoteHelpCoordinator(
     context: Context
 ) {
     private val appContext = context.applicationContext
+    init {
+        AppLog.install(appContext)
+    }
     private val store = LocalHistoryStore(appContext)
     private val settingsStore = ConnectionSettingsStore(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -480,6 +483,22 @@ class RemoteHelpCoordinator(
         _uiState.value = _uiState.value.copy(isSettingsVisible = true)
     }
 
+    fun openLogsDirectory() {
+        val currentPath = AppLog.logDirectoryPath(appContext)
+        runCatching {
+            AppLog.openLogsDirectory(appContext)
+        }.onFailure {
+            _uiState.value = _uiState.value.copy(
+                bannerMessage = if (currentPath.isNotBlank()) {
+                    "无法打开日志目录：$currentPath"
+                } else {
+                    "无法打开日志目录"
+                }
+            )
+            AppLog.logThrowable("RemoteHelpCoordinator", it, "打开日志目录失败")
+        }
+    }
+
     fun closeSettings() {
         _uiState.value = _uiState.value.copy(isSettingsVisible = false)
     }
@@ -622,44 +641,51 @@ class RemoteHelpCoordinator(
 
     private fun onCallSignal(signalType: String, payload: JSONObject, fromDisplayName: String) {
         val session = _uiState.value.activeSession ?: return
-        when (signalType) {
-            SIGNAL_HELP_ACCEPT -> {
-                _uiState.value = _uiState.value.copy(
-                    activeSession = session.copy(
-                        stage = HelpStage.VERIFIED,
-                        verificationAcceptedAt = System.currentTimeMillis()
-                    ),
-                    bannerMessage = "${fromDisplayName.ifBlank { "对端" }} 已通过视频验证，正在进入远程协助"
-                )
-                openAssist()
-            }
-
-            SIGNAL_HELP_REJECT -> {
-                finishSession("${fromDisplayName.ifBlank { "对端" }} 拒绝了协助")
-            }
-
-            SIGNAL_VERIFICATION_LEFT -> {
-                val requestId = payload.optString("requestId")
-                if (requestId == session.requestId) {
-                    onVerificationParticipantLeft()
-                }
-            }
-
-            SIGNAL_VERIFICATION_REQUESTED -> {
-                val requestId = payload.optString("requestId")
-                if (requestId == session.requestId && _uiState.value.side == DeviceSide.HELPER) {
-                    onVerificationPeerReady()
-                }
-            }
-
-            SIGNAL_VERIFICATION_ACCEPTED -> {
-                val requestId = payload.optString("requestId")
-                if (requestId == session.requestId && _uiState.value.side == DeviceSide.ELDER) {
+        runCatching {
+            when (signalType) {
+                SIGNAL_HELP_ACCEPT -> {
                     _uiState.value = _uiState.value.copy(
-                        bannerMessage = "对方已接受视频认证，正在接入画面"
+                        activeSession = session.copy(
+                            stage = HelpStage.VERIFIED,
+                            verificationAcceptedAt = System.currentTimeMillis()
+                        ),
+                        bannerMessage = "${fromDisplayName.ifBlank { "对端" }} 已通过视频验证，正在进入远程协助"
                     )
+                    openAssist()
+                }
+
+                SIGNAL_HELP_REJECT -> {
+                    finishSession("${fromDisplayName.ifBlank { "对端" }} 拒绝了协助")
+                }
+
+                SIGNAL_VERIFICATION_LEFT -> {
+                    val requestId = payload.optString("requestId")
+                    if (requestId == session.requestId) {
+                        onVerificationParticipantLeft()
+                    }
+                }
+
+                SIGNAL_VERIFICATION_REQUESTED -> {
+                    val requestId = payload.optString("requestId")
+                    if (requestId == session.requestId && _uiState.value.side == DeviceSide.HELPER) {
+                        onVerificationPeerReady()
+                    }
+                }
+
+                SIGNAL_VERIFICATION_ACCEPTED -> {
+                    val requestId = payload.optString("requestId")
+                    if (requestId == session.requestId && _uiState.value.side == DeviceSide.ELDER) {
+                        _uiState.value = _uiState.value.copy(
+                            bannerMessage = "对方已接受视频认证，正在接入画面"
+                        )
+                    }
                 }
             }
+        }.onFailure {
+            AppLog.logThrowable("RemoteHelpCoordinator", it, "处理协议信令失败: $signalType")
+            _uiState.value = _uiState.value.copy(
+                bannerMessage = "网络/信令异常，请检查连接"
+            )
         }
     }
 

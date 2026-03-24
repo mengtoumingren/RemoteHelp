@@ -141,23 +141,6 @@ fun VerificationScreen(
                         Text("身份验证", fontWeight = FontWeight.Bold, color = Color(0xFF183153))
                         Text(stage.description, color = Color(0xFF526277))
                     }
-                    if (side == DeviceSide.ELDER) {
-                        OutlinedButton(
-                            onClick = onBackClick,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color(0xFF183153)
-                            )
-                        ) {
-                            Text(
-                                text = "返回",
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Clip
-                            )
-                        }
-                    }
                 }
             }
 

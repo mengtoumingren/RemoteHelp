@@ -30,6 +30,8 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.UUID
+import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.ui.UiFeedbackBus
 
 data class CallUiState(
     val serverUrl: String = "ws://10.0.2.2:3000/ws",
@@ -62,6 +64,9 @@ class CallController(
         private const val LOCAL_CAPTURE_WIDTH = 1280
         private const val LOCAL_CAPTURE_HEIGHT = 720
         private const val LOCAL_CAPTURE_FPS = 30
+        private const val MAX_RTC_RECONNECT_ATTEMPTS = 4
+        private const val BASE_RTC_RECONNECT_DELAY_MS = 1000L
+        private const val MAX_RTC_RECONNECT_DELAY_MS = 10_000L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -88,6 +93,9 @@ class CallController(
     private var areLocalTracksAttached = false
     private var shouldInitiateOffer = true
     private var isRtcOfferAllowed = false
+    private var allowRtcReconnect = false
+    private var rtcReconnectAttempt = 0
+    private var rtcReconnectRunnable: Runnable? = null
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -167,6 +175,9 @@ class CallController(
             setStatus("请填写服务地址和房间号")
             return
         }
+        allowRtcReconnect = true
+        cancelRtcReconnect()
+        rtcReconnectAttempt = 0
         if (prepareLocalMedia) {
             startLocalMedia()
         }
@@ -180,6 +191,9 @@ class CallController(
     }
 
     fun leaveRoom() {
+        allowRtcReconnect = false
+        cancelRtcReconnect()
+        rtcReconnectAttempt = 0
         signalClient.leave()
         clearPeerConnection()
         remoteClientId = null
@@ -234,6 +248,8 @@ class CallController(
     }
 
     fun release() {
+        allowRtcReconnect = false
+        cancelRtcReconnect()
         leaveRoom()
         stopLocalCapture()
         videoCapturer?.dispose()
@@ -276,10 +292,15 @@ class CallController(
                 override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                    if (state == PeerConnection.IceConnectionState.CONNECTED ||
+                        state == PeerConnection.IceConnectionState.COMPLETED
+                    ) {
+                        cancelRtcReconnect()
+                    }
                     if (state == PeerConnection.IceConnectionState.FAILED ||
                         state == PeerConnection.IceConnectionState.CLOSED
                     ) {
-                        clearRemotePeerState()
+                        handleRtcConnectionLost("ICE: $state")
                     }
                     setStatus("ICE: $state")
                 }
@@ -441,7 +462,11 @@ class CallController(
         pendingRemoteIce.clear()
     }
 
-    private fun clearPeerConnection() {
+    private fun clearPeerConnection(resetRtcRetryState: Boolean = true) {
+        if (resetRtcRetryState) {
+            cancelRtcReconnect()
+            rtcReconnectAttempt = 0
+        }
         remoteVideoTrack = null
         remoteAudioTrack = null
         pendingRemoteIce.clear()
@@ -450,6 +475,48 @@ class CallController(
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+    }
+
+    private fun handleRtcConnectionLost(status: String) {
+        if (!allowRtcReconnect || !_uiState.value.isInRoom || _uiState.value.roomParticipantCount <= 1) {
+            clearRemotePeerState()
+            return
+        }
+        cancelRtcReconnect()
+        clearPeerConnection(resetRtcRetryState = false)
+        scheduleRtcReconnect(status)
+    }
+
+    private fun scheduleRtcReconnect(message: String) {
+        if (!allowRtcReconnect || !_uiState.value.isInRoom || _uiState.value.roomParticipantCount <= 1) {
+            clearRemotePeerState()
+            return
+        }
+        if (rtcReconnectAttempt >= MAX_RTC_RECONNECT_ATTEMPTS) {
+            clearRemotePeerState()
+            setStatus("RTC 重连失败: $message")
+            UiFeedbackBus.emitTopToast("视频通话重连失败，请检查网络后重试")
+            return
+        }
+        val delayMs = (BASE_RTC_RECONNECT_DELAY_MS shl rtcReconnectAttempt).coerceAtMost(MAX_RTC_RECONNECT_DELAY_MS)
+        rtcReconnectAttempt += 1
+        setStatus("RTC 断开，${delayMs / 1000}s 后重连")
+        if (rtcReconnectAttempt == 1) {
+            UiFeedbackBus.emitTopToast("网络异常，视频通话正在重连")
+        }
+        cancelRtcReconnect()
+        rtcReconnectRunnable = Runnable {
+            if (!allowRtcReconnect || !_uiState.value.isInRoom || _uiState.value.roomParticipantCount <= 1) {
+                return@Runnable
+            }
+            requestRtcNegotiationIfReady()
+        }
+        mainHandler.postDelayed(rtcReconnectRunnable!!, delayMs)
+    }
+
+    private fun cancelRtcReconnect() {
+        rtcReconnectRunnable?.let(mainHandler::removeCallbacks)
+        rtcReconnectRunnable = null
     }
 
     private fun stopLocalCapture() {
@@ -472,6 +539,8 @@ class CallController(
     }
 
     private fun clearRemotePeerState() {
+        cancelRtcReconnect()
+        rtcReconnectAttempt = 0
         remoteVideoTrack = null
         remoteAudioTrack = null
         remoteClientId = null
@@ -544,70 +613,85 @@ class CallController(
 
     private fun onSignalEvent(event: SignalEvent) {
         mainHandler.post {
-            when (event) {
-                is SignalEvent.Connected -> setStatus("已连接信令服务，等待房间加入")
-                is SignalEvent.Joined -> {
-                    val hasExistingPeer = event.participants.any { it != event.clientId }
-                    _uiState.value = _uiState.value.copy(
-                        isConnecting = false,
-                        isInRoom = true,
-                        roomParticipantCount = event.participants.size,
-                        remotePeerName = if (hasExistingPeer) {
-                            _uiState.value.remotePeerName.ifBlank { "对端" }
-                        } else {
-                            _uiState.value.remotePeerName
-                        },
-                        status = "已加入房间，当前人数 ${event.participants.size}"
-                    )
-                }
+            runCatching {
+                when (event) {
+                    is SignalEvent.Connected -> setStatus("已连接信令服务，等待房间加入")
+                    is SignalEvent.Reconnecting -> {
+                        _uiState.value = _uiState.value.copy(isConnecting = true)
+                        setStatus("${event.message}，${event.delayMs / 1000}s 后重连（${event.attempt}/6）")
+                    }
+                    is SignalEvent.Joined -> {
+                        val hasExistingPeer = event.participants.any { it != event.clientId }
+                        _uiState.value = _uiState.value.copy(
+                            isConnecting = false,
+                            isInRoom = true,
+                            roomParticipantCount = event.participants.size,
+                            remotePeerName = if (hasExistingPeer) {
+                                _uiState.value.remotePeerName.ifBlank { "对端" }
+                            } else {
+                                _uiState.value.remotePeerName
+                            },
+                            status = "已加入房间，当前人数 ${event.participants.size}"
+                        )
+                        if (event.participants.size > 1) {
+                            requestRtcNegotiationIfReady()
+                        }
+                    }
 
-                is SignalEvent.PeerJoined -> {
-                    remoteClientId = event.clientId
-                    _uiState.value = _uiState.value.copy(
-                        remotePeerName = event.displayName,
-                        roomParticipantCount = (_uiState.value.roomParticipantCount + 1).coerceAtLeast(1)
-                    )
-                    setStatus("对端已加入，准备协商")
-                    if (canInitiateOffer()) {
-                        makeOffer()
+                    is SignalEvent.PeerJoined -> {
+                        remoteClientId = event.clientId
+                        _uiState.value = _uiState.value.copy(
+                            remotePeerName = event.displayName,
+                            roomParticipantCount = (_uiState.value.roomParticipantCount + 1).coerceAtLeast(1)
+                        )
+                        setStatus("对端已加入，准备协商")
+                        if (canInitiateOffer()) {
+                            makeOffer()
+                        }
+                    }
+
+                    is SignalEvent.PeerLeft -> {
+                        setStatus("对端已离开房间")
+                        clearRemotePeerState()
+                        _uiState.value = _uiState.value.copy(
+                            roomParticipantCount = (_uiState.value.roomParticipantCount - 1).coerceAtLeast(1)
+                        )
+                        clearPeerConnection()
+                    }
+
+                    is SignalEvent.SignalMessage -> {
+                        remoteClientId = event.fromClientId
+                        _uiState.value = _uiState.value.copy(remotePeerName = event.fromDisplayName)
+                        when (event.signalType) {
+                            "offer" -> handleOffer(event.fromClientId, event.payload)
+                            "answer" -> handleAnswer(event.payload)
+                            "candidate" -> handleCandidate(event.payload)
+                            else -> onAppSignal(event.signalType, event.payload, event.fromDisplayName)
+                        }
+                    }
+
+                    is SignalEvent.Error -> {
+                        _uiState.value = _uiState.value.copy(isConnecting = false)
+                        setStatus(event.message)
+                    }
+
+                    is SignalEvent.Disconnected -> {
+                        cancelRtcReconnect()
+                        rtcReconnectAttempt = 0
+                        clearRemotePeerState()
+                        allowRtcReconnect = false
+                        _uiState.value = _uiState.value.copy(
+                            isConnecting = false,
+                            isInRoom = false,
+                            roomParticipantCount = 0,
+                            remotePeerName = ""
+                        )
+                        setStatus("信令连接已断开")
                     }
                 }
-
-                is SignalEvent.PeerLeft -> {
-                    setStatus("对端已离开房间")
-                    clearRemotePeerState()
-                    _uiState.value = _uiState.value.copy(
-                        roomParticipantCount = (_uiState.value.roomParticipantCount - 1).coerceAtLeast(1)
-                    )
-                    clearPeerConnection()
-                }
-
-                is SignalEvent.SignalMessage -> {
-                    remoteClientId = event.fromClientId
-                    _uiState.value = _uiState.value.copy(remotePeerName = event.fromDisplayName)
-                    when (event.signalType) {
-                        "offer" -> handleOffer(event.fromClientId, event.payload)
-                        "answer" -> handleAnswer(event.payload)
-                        "candidate" -> handleCandidate(event.payload)
-                        else -> onAppSignal(event.signalType, event.payload, event.fromDisplayName)
-                    }
-                }
-
-                is SignalEvent.Error -> {
-                    _uiState.value = _uiState.value.copy(isConnecting = false)
-                    setStatus(event.message)
-                }
-
-                is SignalEvent.Disconnected -> {
-                    clearRemotePeerState()
-                    _uiState.value = _uiState.value.copy(
-                        isConnecting = false,
-                        isInRoom = false,
-                        roomParticipantCount = 0,
-                        remotePeerName = ""
-                    )
-                    setStatus("信令连接已断开")
-                }
+            }.onFailure {
+                AppLog.logThrowable("CallController", it, "处理信令事件失败: ${event::class.simpleName}")
+                setStatus("视频通话处理异常，请重试")
             }
         }
     }
