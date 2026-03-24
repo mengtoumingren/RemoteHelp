@@ -181,7 +181,7 @@ private fun HelperAssistBody(
                 ) {
                     ControlRendererPanel(
                         renderer = screenRenderer,
-                        placeholder = "等待长辈屏幕画面",
+                        placeholder = "等待对方屏幕画面",
                         aspectRatio = screenAspectRatio,
                         modifier = Modifier.matchParentSize(),
                         allowTouch = true,
@@ -215,7 +215,7 @@ private fun ElderAssistBody(
             Text(targetStatus, color = Color(0xFF526277))
             Text("屏幕共享：${if (captureActive) "已开启" else "未开启"}", color = Color(0xFF526277))
             Text("无障碍服务：${if (accessibilityEnabled) "已开启" else "未开启"}", color = Color(0xFF526277))
-            Text("请保持当前页面开启；完成屏幕采集和无障碍授权后，子女端即可继续操作。", color = Color(0xFF526277))
+            Text("请保持当前页面开启；完成屏幕采集和无障碍授权后，“我要协助”一侧即可继续操作。", color = Color(0xFF526277))
             if (!isConnected) {
                 Button(onClick = onConnectClick, modifier = Modifier.fillMaxWidth()) {
                     Text("连接协助通道")

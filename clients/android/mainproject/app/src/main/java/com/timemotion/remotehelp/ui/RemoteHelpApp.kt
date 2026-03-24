@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,10 +64,10 @@ import com.timemotion.remotehelp.core.SessionHistoryItem
 import com.timemotion.remotehelp.core.formatDateTime
 import com.timemotion.remotehelp.core.formatRemaining
 import com.timemotion.remotehelp.remote.RemoteControlUiState
-import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.ui.remote.RemoteAssistScreen
 import com.timemotion.remotehelp.ui.verification.VerificationScreen
 import com.timemotion.remotehelp.webrtc.CallUiState
+import kotlinx.coroutines.delay
 
 @Composable
 fun RemoteHelpApp(
@@ -77,13 +78,13 @@ fun RemoteHelpApp(
     projectionIntent: Intent
 ) {
     val context = LocalContext.current
+    val latestUiState by rememberUpdatedState(uiState)
+    val latestCallState by rememberUpdatedState(callState)
     var joinAfterPermission by remember { mutableStateOf(false) }
     var mediaPermissionsGranted by remember { mutableStateOf(false) }
     var notificationPermissionGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) }
     var capturePromptedSessionId by remember { mutableStateOf<String?>(null) }
     var accessibilityPromptedSessionId by remember { mutableStateOf<String?>(null) }
-    var helperPeerSeenSessionId by remember { mutableStateOf<String?>(null) }
-    var helperPeerExitHandledSessionId by remember { mutableStateOf<String?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(RequestMultiplePermissions()) { permissions ->
         mediaPermissionsGranted = permissions.values.all { it }
         if (!mediaPermissionsGranted) {
@@ -116,10 +117,7 @@ fun RemoteHelpApp(
         uiState.activeSession?.requestId,
         uiState.activeSession?.stage
     ) {
-        val shouldPrepareVideo = (
-            uiState.currentScreen == AppScreen.VERIFICATION ||
-                (uiState.side == DeviceSide.HELPER && uiState.activeSession?.stage == HelpStage.REQUEST_CREATED)
-            )
+        val shouldPrepareVideo = uiState.currentScreen == AppScreen.VERIFICATION
         if (shouldPrepareVideo && !mediaPermissionsGranted) {
             permissionLauncher.launch(
                 arrayOf(
@@ -144,7 +142,9 @@ fun RemoteHelpApp(
                 uiState.activeSession?.stage == HelpStage.REQUEST_CREATED
             )
         val shouldJoinVisibleVerification = uiState.currentScreen == AppScreen.VERIFICATION
-        if ((shouldJoinHiddenVerification || shouldJoinVisibleVerification) && mediaPermissionsGranted) {
+        if (shouldJoinHiddenVerification && !callState.isInRoom && !callState.isConnecting) {
+            coordinator.callController.joinRoom(prepareLocalMedia = false)
+        } else if (shouldJoinVisibleVerification && mediaPermissionsGranted) {
             coordinator.callController.startLocalMedia()
             if (!callState.isInRoom && !callState.isConnecting) {
                 coordinator.callController.joinRoom()
@@ -171,53 +171,52 @@ fun RemoteHelpApp(
 
     LaunchedEffect(
         uiState.side,
-        uiState.activeSession?.stage,
-        uiState.currentScreen,
-        callState.remotePeerName
-    ) {
-        if (
-            uiState.side == DeviceSide.HELPER &&
-            uiState.activeSession?.stage == HelpStage.REQUEST_CREATED &&
-            uiState.currentScreen != AppScreen.VERIFICATION &&
-            callState.remotePeerName.isNotBlank()
-        ) {
-            coordinator.onVerificationPeerReady()
-        }
-    }
-
-    LaunchedEffect(
-        uiState.side,
         uiState.currentScreen,
         uiState.activeSession?.requestId,
         uiState.activeSession?.stage,
-        callState.remotePeerName,
-        remoteState.peers,
-        remoteState.isConnected
+        callState.isInRoom,
+        callState.remoteRenderer
     ) {
-        val sessionId = uiState.activeSession?.requestId
-        if (uiState.side != DeviceSide.HELPER || sessionId == null) {
+        val shouldNotifyVerificationRequest =
+            uiState.side == DeviceSide.ELDER &&
+                uiState.currentScreen == AppScreen.VERIFICATION &&
+                uiState.activeSession?.stage == HelpStage.VERIFYING &&
+                callState.isInRoom
+        if (!shouldNotifyVerificationRequest) {
             return@LaunchedEffect
         }
-        val hasVerificationPeer = callState.remotePeerName.isNotBlank()
-        val hasAssistPeer = remoteState.peers.any { it.role == RemoteRole.TARGET }
-        val hasAnyPeer = hasVerificationPeer || hasAssistPeer
-        val shouldWatchPeerExit = uiState.currentScreen == AppScreen.VERIFICATION || uiState.currentScreen == AppScreen.ASSIST
-        if (hasAnyPeer) {
-            helperPeerSeenSessionId = sessionId
-            helperPeerExitHandledSessionId = null
-        } else if (
-            shouldWatchPeerExit &&
-            helperPeerSeenSessionId == sessionId &&
-            helperPeerExitHandledSessionId != sessionId &&
-            uiState.activeSession?.stage != HelpStage.REQUEST_CREATED
+        while (
+            latestUiState.side == DeviceSide.ELDER &&
+                latestUiState.currentScreen == AppScreen.VERIFICATION &&
+                latestUiState.activeSession?.stage == HelpStage.VERIFYING &&
+                latestCallState.isInRoom &&
+                latestCallState.remoteRenderer == null
         ) {
-            helperPeerExitHandledSessionId = sessionId
-            coordinator.onRemoteParticipantUnexpectedExit()
+            coordinator.notifyVerificationRequested()
+            delay(2000L)
         }
     }
 
     if (uiState.isSettingsVisible) {
         SettingsDialog(uiState, coordinator)
+    }
+    if (
+        uiState.side == DeviceSide.HELPER &&
+        uiState.isVerificationRequestVisible &&
+        uiState.activeSession != null
+    ) {
+        VerificationRequestDialog(
+            session = uiState.activeSession,
+            onAccept = coordinator::acceptVerificationRequest,
+            onReject = coordinator::rejectVerificationRequest
+        )
+    }
+    uiState.pendingInviteSession?.let { session ->
+        InvitePreviewDialog(
+            session = session,
+            onDismiss = coordinator::dismissPendingInvite,
+            onConfirm = coordinator::confirmPendingInvite
+        )
     }
 
     when (uiState.currentScreen) {
@@ -229,6 +228,7 @@ fun RemoteHelpApp(
             bannerMessage = uiState.bannerMessage,
             onDismissBanner = coordinator::dismissBanner,
             onBackClick = { coordinator.endCurrentSession("已取消本次请求") },
+            onExpired = { coordinator.endCurrentSession("短信链接已过期，请重新发起协助") },
             onCopyLink = {
                 uiState.activeSession?.deepLink?.let { link ->
                     val clipboard = android.content.ClipboardManager::class.java
@@ -244,7 +244,7 @@ fun RemoteHelpApp(
                         Uri.parse("smsto:${session.elderPhone}")
                     ).putExtra(
                         "sms_body",
-                        "请点击下面的家庭远程协助验证链接：\n${session.deepLink}"
+                        "请点击下面的远程协助验证链接：\n${session.deepLink}"
                     )
                     runCatching { context.startActivity(smsIntent) }
                         .onFailure {
@@ -274,8 +274,10 @@ fun RemoteHelpApp(
             onLeaveClick = coordinator.callController::leaveRoom,
             onToggleMic = coordinator.callController::toggleMic,
             onToggleCamera = coordinator.callController::toggleCamera,
+            onToggleSpeaker = coordinator.callController::toggleSpeakerOutput,
             onAcceptClick = coordinator::acceptVerification,
             onRejectClick = coordinator::rejectVerification,
+            onRemoteVideoTimeoutConfirm = coordinator::failVerificationDueToRemoteTimeout,
             onContinueAssist = coordinator::openAssist,
             onBackClick = coordinator::leaveVerification
         )
@@ -347,6 +349,78 @@ fun RemoteHelpApp(
 }
 
 @Composable
+private fun VerificationRequestDialog(
+    session: ActiveHelpSession,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("视频认证请求") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("对方请求进行视频认证。", color = Color(0xFF526277))
+                InfoLine("协助对象", "${session.elderName} · ${session.elderPhone}")
+                InfoLine("剩余有效期", formatRemaining(session.expiresAt))
+            }
+        },
+        confirmButton = {
+            Button(onClick = onAccept) {
+                Text("接受")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onReject) {
+                Text("拒绝")
+            }
+        }
+    )
+}
+
+@Composable
+private fun InvitePreviewDialog(
+    session: ActiveHelpSession,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    var currentTime by remember(session.requestId, session.expiresAt) {
+        mutableStateOf(System.currentTimeMillis())
+    }
+    LaunchedEffect(session.requestId, session.expiresAt) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            currentTime = now
+            if (now >= session.expiresAt) {
+                break
+            }
+            delay(1000L)
+        }
+    }
+    val isExpired = currentTime >= session.expiresAt
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("确认协助链接信息") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("请先核对协助链接中的信息，确认无误后再进入视频验证。", color = Color(0xFF526277))
+                InfoLine("协助方", session.helperName)
+                InfoLine("剩余有效时间", if (isExpired) "已过期" else formatRemaining(session.expiresAt, currentTime))
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !isExpired) {
+                Text("进入视频验证")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
 private fun DashboardScreen(
     uiState: RemoteHelpUiState,
     coordinator: RemoteHelpCoordinator
@@ -393,7 +467,7 @@ private fun TopHero(
             ) {
                 Column {
                     Text(
-                        text = "家庭远程协助",
+                        text = "远程协助",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF183153)
@@ -405,10 +479,10 @@ private fun TopHero(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SideButton("子女端", uiState.side == DeviceSide.HELPER) {
+                SideButton("我要协助", uiState.side == DeviceSide.HELPER) {
                     coordinator.switchSide(DeviceSide.HELPER)
                 }
-                SideButton("长辈端", uiState.side == DeviceSide.ELDER) {
+                SideButton("需要协助", uiState.side == DeviceSide.ELDER) {
                     coordinator.switchSide(DeviceSide.ELDER)
                 }
             }
@@ -427,7 +501,7 @@ private fun HelperHome(
             OutlinedTextField(
                 value = uiState.elderPhone,
                 onValueChange = coordinator::updateElderPhone,
-                label = { Text("请输入父母手机号") },
+                label = { Text("请输入协助对象手机号") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
@@ -440,7 +514,7 @@ private fun HelperHome(
                 Text("发起协助")
             }
             Text(text = "协助说明", fontWeight = FontWeight.Medium, color = Color(0xFF183153))
-            Text(text = "• 父母将收到短信验证链接", color = Color(0xFF526277))
+            Text(text = "• 对方将收到短信验证链接", color = Color(0xFF526277))
             Text(text = "• 需视频确认后开始协助", color = Color(0xFF526277))
             Text(text = "• 当前连接配置从设置中读取并本地复用", color = Color(0xFF526277))
         }
@@ -458,8 +532,8 @@ private fun ElderHome(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = "家庭远程协助", fontWeight = FontWeight.Bold, color = Color(0xFF183153))
-            Text(text = "点击短信链接后会自动进入身份验证", color = Color(0xFF526277))
+            Text(text = "远程协助", fontWeight = FontWeight.Bold, color = Color(0xFF183153))
+            Text(text = "点击短信链接后可先核对协助信息，再进入视频验证", color = Color(0xFF526277))
             OutlinedTextField(
                 value = uiState.inviteEntry,
                 onValueChange = coordinator::updateInviteEntry,
@@ -470,7 +544,7 @@ private fun ElderHome(
                 onClick = { coordinator.consumeInvite(uiState.inviteEntry) },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("进入身份验证")
+                Text("查看协助信息")
             }
         }
     }
@@ -483,9 +557,25 @@ private fun SessionScreen(
     bannerMessage: String?,
     onDismissBanner: () -> Unit,
     onBackClick: () -> Unit,
+    onExpired: () -> Unit,
     onCopyLink: () -> Unit,
     onSendSms: () -> Unit
 ) {
+    var currentTime by remember(session?.requestId, session?.expiresAt) {
+        mutableStateOf(System.currentTimeMillis())
+    }
+    LaunchedEffect(session?.requestId, session?.expiresAt) {
+        val activeSession = session ?: return@LaunchedEffect
+        while (true) {
+            val now = System.currentTimeMillis()
+            currentTime = now
+            if (now >= activeSession.expiresAt) {
+                onExpired()
+                break
+            }
+            delay(1000L)
+        }
+    }
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
         Column(
             modifier = Modifier
@@ -524,18 +614,18 @@ private fun SessionScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         InfoLine("当前阶段", it.stage.title)
                         InfoLine("协助对象", "${it.elderName} · ${it.elderPhone}")
-                        InfoLine("剩余有效期", formatRemaining(it.expiresAt))
+                        InfoLine("剩余有效期", formatRemaining(it.expiresAt, currentTime))
                         if (side == DeviceSide.HELPER) {
                             LinkPreviewLine("短信链接", it.deepLink)
-                            OutlinedButton(onClick = onCopyLink, modifier = Modifier.fillMaxWidth()) {
-                                Text("复制短信链接")
-                            }
                             Button(onClick = onSendSms, modifier = Modifier.fillMaxWidth()) {
                                 Text("发送短信")
                             }
-                            Text("长辈完成短信认证后，将自动进入视频验证。", color = Color(0xFF526277))
+                            OutlinedButton(onClick = onCopyLink, modifier = Modifier.fillMaxWidth()) {
+                                Text("复制短信链接")
+                            }
+                            Text("对方完成短信认证后，将自动进入视频验证。", color = Color(0xFF526277))
                         } else {
-                            InfoLine("发起人", it.helperName)
+                            InfoLine("协助方", it.helperName)
                         }
                     }
                 }
@@ -550,7 +640,10 @@ private fun RecentContactsCard(
     coordinator: RemoteHelpCoordinator
 ) {
     ProductCard {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Text(text = "最近协助", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
             if (contacts.isEmpty()) {
                 Text(text = "还没有历史联系人", color = Color(0xFF526277))
@@ -614,7 +707,7 @@ private fun SettingsDialog(
                 OutlinedTextField(
                     value = uiState.helperName,
                     onValueChange = coordinator::updateHelperName,
-                    label = { Text("默认子女姓名") },
+                    label = { Text("默认协助方姓名") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(

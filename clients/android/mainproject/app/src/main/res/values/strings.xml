@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">家庭远程协助</string>
+    <string name="app_name">远程协助</string>
     <string name="permission_required">需要相机和麦克风权限才能进行视频验证</string>
 </resources>

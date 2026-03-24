@@ -1,6 +1,7 @@
 package com.timemotion.remotehelp.webrtc
 
 import android.content.Context
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +40,7 @@ data class CallUiState(
     val isInRoom: Boolean = false,
     val isMicEnabled: Boolean = true,
     val isCameraEnabled: Boolean = true,
+    val isSpeakerOn: Boolean = true,
     val remotePeerName: String = "",
     val localRenderer: VideoRendererBinding? = null,
     val remoteRenderer: VideoRendererBinding? = null
@@ -62,6 +64,7 @@ class CallController(
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioManager = context.getSystemService(AudioManager::class.java)
     private val eglBase = EglBase.create()
     private val okHttpClient = OkHttpClient.Builder().build()
     private val pendingRemoteIce = mutableListOf<IceCandidate>()
@@ -110,6 +113,7 @@ class CallController(
 
     fun startLocalMedia() {
         if (localVideoTrack != null && localAudioTrack != null) {
+            configureAudioRoute()
             return
         }
         val capturer = createVideoCapturer()
@@ -130,16 +134,19 @@ class CallController(
         localAudioTrack = localAudioSource?.let {
             peerConnectionFactory.createAudioTrack("local-audio", it)
         }
+        configureAudioRoute()
         publishRendererBindings()
         setStatus("本地媒体已准备")
     }
 
-    fun joinRoom() {
+    fun joinRoom(prepareLocalMedia: Boolean = true) {
         if (_uiState.value.serverUrl.isBlank() || _uiState.value.roomId.isBlank()) {
             setStatus("请填写服务地址和房间号")
             return
         }
-        startLocalMedia()
+        if (prepareLocalMedia) {
+            startLocalMedia()
+        }
         remoteClientId = null
         _uiState.value = _uiState.value.copy(isConnecting = true, status = "连接信令服务中")
         signalClient.connect(
@@ -153,6 +160,7 @@ class CallController(
         signalClient.leave()
         clearPeerConnection()
         remoteClientId = null
+        resetAudioRoute()
         _uiState.value = _uiState.value.copy(
             isConnecting = false,
             isInRoom = false,
@@ -179,8 +187,19 @@ class CallController(
         _uiState.value = _uiState.value.copy(isCameraEnabled = enabled)
     }
 
-    fun sendAppSignal(signalType: String, payload: JSONObject = JSONObject()) {
-        signalClient.sendSignal(signalType, remoteClientId, payload)
+    fun toggleSpeakerOutput() {
+        _uiState.value = _uiState.value.copy(isSpeakerOn = !_uiState.value.isSpeakerOn)
+        if (localAudioTrack != null || _uiState.value.isInRoom || _uiState.value.isConnecting) {
+            configureAudioRoute()
+        }
+    }
+
+    fun sendAppSignal(
+        signalType: String,
+        payload: JSONObject = JSONObject(),
+        broadcast: Boolean = false
+    ) {
+        signalClient.sendSignal(signalType, if (broadcast) null else remoteClientId, payload)
     }
 
     fun release() {
@@ -226,8 +245,7 @@ class CallController(
                 override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                    if (state == PeerConnection.IceConnectionState.DISCONNECTED ||
-                        state == PeerConnection.IceConnectionState.FAILED ||
+                    if (state == PeerConnection.IceConnectionState.FAILED ||
                         state == PeerConnection.IceConnectionState.CLOSED
                     ) {
                         clearRemotePeerState()
@@ -396,6 +414,16 @@ class CallController(
         isLocalCaptureStarted = false
     }
 
+    private fun configureAudioRoute() {
+        audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager?.isSpeakerphoneOn = _uiState.value.isSpeakerOn
+    }
+
+    private fun resetAudioRoute() {
+        audioManager?.isSpeakerphoneOn = false
+        audioManager?.mode = AudioManager.MODE_NORMAL
+    }
+
     private fun clearRemotePeerState() {
         remoteVideoTrack = null
         remoteClientId = null
@@ -438,9 +466,15 @@ class CallController(
             when (event) {
                 is SignalEvent.Connected -> setStatus("已连接信令服务，等待房间加入")
                 is SignalEvent.Joined -> {
+                    val hasExistingPeer = event.participants.any { it != event.clientId }
                     _uiState.value = _uiState.value.copy(
                         isConnecting = false,
                         isInRoom = true,
+                        remotePeerName = if (hasExistingPeer) {
+                            _uiState.value.remotePeerName.ifBlank { "对端" }
+                        } else {
+                            _uiState.value.remotePeerName
+                        },
                         status = "已加入房间，当前人数 ${event.participants.size}"
                     )
                 }

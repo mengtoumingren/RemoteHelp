@@ -30,8 +30,8 @@ object HelpLinkCodec {
     ): Pair<HelpInvitePayload, String> {
         val payload = HelpInvitePayload(
             requestId = "req-${UUID.randomUUID().toString().take(8)}",
-            helperName = helperName.trim().ifBlank { "家人" },
-            elderName = elderName.trim().ifBlank { "家人" },
+            helperName = helperName.trim().ifBlank { "协助方" },
+            elderName = elderName.trim().ifBlank { "协助对象" },
             elderPhone = elderPhone.trim(),
             createdAt = now,
             expiresAt = now + DEFAULT_TTL_MS
@@ -74,7 +74,7 @@ object HelpLinkCodec {
             createdAt = json.optLong("createdAt"),
             expiresAt = json.optLong("expiresAt")
         )
-        require(payload.expiresAt > System.currentTimeMillis()) { "链接已过期，请让子女重新发起" }
+        require(payload.expiresAt > System.currentTimeMillis()) { "链接已过期，请重新发起协助" }
         payload
     }
 

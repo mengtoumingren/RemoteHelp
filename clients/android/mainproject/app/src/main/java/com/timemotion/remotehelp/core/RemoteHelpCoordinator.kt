@@ -15,18 +15,31 @@ class RemoteHelpCoordinator(
     private val appContext = context.applicationContext
     private val store = LocalHistoryStore(appContext)
     private val settingsStore = ConnectionSettingsStore(appContext)
+    private val restoredHelperSession = store.loadPendingHelperSession()
+        ?.takeUnless { it.isExpired() }
+        ?.copy(stage = HelpStage.REQUEST_CREATED, verificationAcceptedAt = null, endReason = null)
     private val _uiState = MutableStateFlow(
         RemoteHelpUiState(
             serverUrl = settingsStore.loadServerUrl("ws://10.0.2.2:3000/ws"),
             helperName = settingsStore.loadHelperName("张三"),
+            activeSession = restoredHelperSession,
             recentContacts = store.loadRecentContacts(),
-            history = store.loadHistory()
+            history = store.loadHistory(),
+            bannerMessage = if (restoredHelperSession != null) "已恢复最近协助请求，等待对方进入视频核验" else null
         )
     )
 
     val callController = CallController(appContext, ::onCallSignal)
     val remoteController = RemoteControlController(appContext)
     val uiState: StateFlow<RemoteHelpUiState> = _uiState.asStateFlow()
+
+    init {
+        if (restoredHelperSession == null) {
+            store.clearPendingHelperSession()
+        } else {
+            configureCallController(restoredHelperSession)
+        }
+    }
 
     fun updateServerUrl(value: String) {
         _uiState.value = _uiState.value.copy(serverUrl = value)
@@ -57,6 +70,8 @@ class RemoteHelpCoordinator(
 
     fun consumeInvite(raw: String) {
         HelpLinkCodec.parse(raw).onSuccess { payload ->
+            callController.leaveRoom()
+            remoteController.disconnect()
             val token = HelpLinkCodec.encode(payload)
             val session = ActiveHelpSession(
                 requestId = payload.requestId,
@@ -75,16 +90,19 @@ class RemoteHelpCoordinator(
                 elderName = payload.elderName,
                 elderPhone = payload.elderPhone,
                 inviteEntry = raw,
-                activeSession = session,
-                currentScreen = AppScreen.VERIFICATION,
-                bannerMessage = "已识别短信验证链接，正在进入视频核验"
+                pendingInviteSession = session,
+                isVerificationRequestVisible = false,
+                activeSession = null,
+                currentScreen = AppScreen.DASHBOARD,
+                bannerMessage = "已识别协助链接，请确认信息后进入视频核验"
             )
-            configureCallController(session)
         }.onFailure {
             callController.leaveRoom()
             remoteController.disconnect()
             _uiState.value = _uiState.value.copy(
                 inviteEntry = "",
+                pendingInviteSession = null,
+                isVerificationRequestVisible = false,
                 activeSession = null,
                 currentScreen = AppScreen.DASHBOARD,
                 bannerMessage = it.message ?: "链接解析失败"
@@ -96,7 +114,7 @@ class RemoteHelpCoordinator(
         val state = _uiState.value
         val phone = state.elderPhone.trim()
         if (phone.isBlank()) {
-            _uiState.value = state.copy(bannerMessage = "请先输入长辈手机号")
+            _uiState.value = state.copy(bannerMessage = "请先输入协助对象手机号")
             return
         }
         val now = System.currentTimeMillis()
@@ -120,11 +138,14 @@ class RemoteHelpCoordinator(
         )
         _uiState.value = state.copy(
             recentContacts = store.loadRecentContacts(),
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
             activeSession = session,
             side = DeviceSide.HELPER,
             currentScreen = AppScreen.SESSION,
-            bannerMessage = "协助请求已生成，正在等待长辈认证短信链接"
+            bannerMessage = "协助请求已生成，正在等待对方认证短信链接"
         )
+        store.savePendingHelperSession(session)
         configureCallController(session)
     }
 
@@ -150,6 +171,37 @@ class RemoteHelpCoordinator(
         )
     }
 
+    fun confirmPendingInvite() {
+        val session = _uiState.value.pendingInviteSession ?: return
+        if (session.isExpired()) {
+            _uiState.value = _uiState.value.copy(
+                inviteEntry = "",
+                pendingInviteSession = null,
+                activeSession = null,
+                currentScreen = AppScreen.DASHBOARD,
+                bannerMessage = "链接已过期，请重新发起协助"
+            )
+            return
+        }
+        configureCallController(session)
+        _uiState.value = _uiState.value.copy(
+            side = DeviceSide.ELDER,
+            activeSession = session,
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
+            currentScreen = AppScreen.VERIFICATION,
+            bannerMessage = "已确认协助信息，正在进入视频核验"
+        )
+    }
+
+    fun dismissPendingInvite() {
+        _uiState.value = _uiState.value.copy(
+            inviteEntry = "",
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false
+        )
+    }
+
     fun showCurrentSession() {
         if (_uiState.value.activeSession == null) {
             _uiState.value = _uiState.value.copy(bannerMessage = "当前没有有效会话")
@@ -161,7 +213,7 @@ class RemoteHelpCoordinator(
     fun leaveVerification() {
         val state = _uiState.value
         val session = state.activeSession
-        if (session != null && state.side == DeviceSide.ELDER && !session.isExpired()) {
+        if (session != null && !session.isExpired()) {
             callController.sendAppSignal(
                 SIGNAL_VERIFICATION_LEFT,
                 JSONObject().put("requestId", session.requestId)
@@ -169,55 +221,151 @@ class RemoteHelpCoordinator(
         }
         callController.leaveRoom()
         if (state.side == DeviceSide.HELPER && session != null) {
-            showCurrentSession()
+            val resetSession = session.copy(
+                stage = HelpStage.REQUEST_CREATED,
+                verificationAcceptedAt = null,
+                endReason = null
+            )
+            store.savePendingHelperSession(resetSession)
+            configureCallController(resetSession)
+            _uiState.value = state.copy(
+                activeSession = resetSession,
+                isVerificationRequestVisible = false,
+                currentScreen = AppScreen.SESSION,
+                bannerMessage = "已退出视频认证，等待对方重新接入"
+            )
             return
         }
         _uiState.value = state.copy(
             inviteEntry = if (session?.isExpired() == true) "" else state.inviteEntry,
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
             activeSession = if (session?.isExpired() == true) null else session,
             currentScreen = AppScreen.DASHBOARD,
             bannerMessage = if (session?.isExpired() == true) {
-                "链接已过期，请让子女重新发起"
+                "链接已过期，请重新发起协助"
             } else {
                 "已退出身份验证，可重新打开短信链接再次进入"
             }
         )
     }
 
+    fun failVerificationDueToRemoteTimeout() {
+        val state = _uiState.value
+        val session = state.activeSession ?: return
+        if (state.side != DeviceSide.ELDER) {
+            return
+        }
+        if (!session.isExpired()) {
+            callController.sendAppSignal(
+                SIGNAL_VERIFICATION_LEFT,
+                JSONObject().put("requestId", session.requestId)
+            )
+        }
+        callController.leaveRoom()
+        remoteController.disconnect()
+        _uiState.value = state.copy(
+            inviteEntry = "",
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
+            activeSession = null,
+            currentScreen = AppScreen.DASHBOARD,
+            bannerMessage = "对方长时间未接入视频画面，认证失败"
+        )
+    }
+
+    fun onVerificationParticipantLeft() {
+        val state = _uiState.value
+        val session = state.activeSession ?: return
+        callController.leaveRoom()
+        remoteController.disconnect()
+        if (session.isExpired()) {
+            if (state.side == DeviceSide.HELPER) {
+                finishSession("短信链接已过期，请重新发起协助")
+            } else {
+                _uiState.value = state.copy(
+                    inviteEntry = "",
+                    pendingInviteSession = null,
+                    isVerificationRequestVisible = false,
+                    activeSession = null,
+                    currentScreen = AppScreen.DASHBOARD,
+                    bannerMessage = "链接已过期，请重新发起协助"
+                )
+            }
+            return
+        }
+        if (state.side == DeviceSide.HELPER) {
+            val resetSession = session.copy(
+                stage = HelpStage.REQUEST_CREATED,
+                verificationAcceptedAt = null,
+                endReason = null
+            )
+            store.savePendingHelperSession(resetSession)
+            configureCallController(resetSession)
+            _uiState.value = state.copy(
+                currentScreen = AppScreen.SESSION,
+                activeSession = resetSession,
+                pendingInviteSession = null,
+                isVerificationRequestVisible = false,
+                bannerMessage = "${session.elderName} 已退出身份验证，可在有效期内重新通过短信链接认证"
+            )
+            return
+        }
+        _uiState.value = state.copy(
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
+            activeSession = session,
+            currentScreen = AppScreen.DASHBOARD,
+            bannerMessage = "${session.helperName} 已退出身份验证，可重新打开短信链接再次进入"
+        )
+    }
+
     fun onVerificationPeerReady() {
         val session = currentSessionOrNotify() ?: return
-        if (_uiState.value.currentScreen == AppScreen.VERIFICATION) {
+        if (_uiState.value.currentScreen == AppScreen.VERIFICATION || _uiState.value.side != DeviceSide.HELPER) {
             return
         }
         configureCallController(session)
         _uiState.value = _uiState.value.copy(
-            currentScreen = AppScreen.VERIFICATION,
             activeSession = session.copy(stage = HelpStage.VERIFYING),
-            bannerMessage = "长辈已完成短信认证，正在进入视频核验"
+            isVerificationRequestVisible = true,
+            pendingInviteSession = null,
+            bannerMessage = "对方请求进行视频核验"
         )
     }
 
-    fun onRemoteParticipantUnexpectedExit() {
-        val session = _uiState.value.activeSession ?: return
-        if (_uiState.value.side != DeviceSide.HELPER) {
+    fun acceptVerificationRequest() {
+        val session = currentSessionOrNotify() ?: return
+        configureCallController(session)
+        callController.leaveRoom()
+        _uiState.value = _uiState.value.copy(isVerificationRequestVisible = false)
+        openVerification()
+    }
+
+    fun rejectVerificationRequest() {
+        val state = _uiState.value
+        val session = state.activeSession ?: return
+        if (state.side != DeviceSide.HELPER) {
             return
+        }
+        if (!session.isExpired()) {
+            callController.sendAppSignal(
+                SIGNAL_VERIFICATION_LEFT,
+                JSONObject().put("requestId", session.requestId)
+            )
         }
         callController.leaveRoom()
-        remoteController.disconnect()
-        if (session.isExpired()) {
-            finishSession("短信链接已过期，请重新发起协助")
-            return
-        }
         val resetSession = session.copy(
             stage = HelpStage.REQUEST_CREATED,
             verificationAcceptedAt = null,
             endReason = null
         )
+        store.savePendingHelperSession(resetSession)
         configureCallController(resetSession)
-        _uiState.value = _uiState.value.copy(
-            currentScreen = AppScreen.SESSION,
+        _uiState.value = state.copy(
             activeSession = resetSession,
-            bannerMessage = "${session.elderName} 已退出，可在有效期内重新通过短信链接认证"
+            isVerificationRequestVisible = false,
+            bannerMessage = "已拒绝视频认证请求"
         )
     }
 
@@ -237,7 +385,20 @@ class RemoteHelpCoordinator(
     fun rejectVerification() {
         val session = currentSessionOrNotify() ?: return
         callController.sendAppSignal(SIGNAL_HELP_REJECT, JSONObject().put("requestId", session.requestId))
-        finishSession("长辈拒绝协助")
+        finishSession("对方拒绝协助", clearInviteEntry = true)
+    }
+
+    fun notifyVerificationRequested() {
+        val state = _uiState.value
+        val session = state.activeSession ?: return
+        if (state.side != DeviceSide.ELDER || state.currentScreen != AppScreen.VERIFICATION || session.isExpired()) {
+            return
+        }
+        callController.sendAppSignal(
+            SIGNAL_VERIFICATION_REQUESTED,
+            JSONObject().put("requestId", session.requestId),
+            broadcast = true
+        )
     }
 
     fun openAssist() {
@@ -246,10 +407,15 @@ class RemoteHelpCoordinator(
             _uiState.value = _uiState.value.copy(bannerMessage = "请先完成视频验证")
             return
         }
+        if (_uiState.value.side == DeviceSide.HELPER) {
+            store.clearPendingHelperSession()
+        }
         configureRemoteController(session)
         _uiState.value = _uiState.value.copy(
             currentScreen = AppScreen.ASSIST,
             activeSession = session.copy(stage = HelpStage.ASSISTING),
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
             bannerMessage = null
         )
     }
@@ -290,7 +456,7 @@ class RemoteHelpCoordinator(
         remoteController.release()
     }
 
-    private fun finishSession(reason: String) {
+    private fun finishSession(reason: String, clearInviteEntry: Boolean = false) {
         val session = _uiState.value.activeSession
         callController.leaveRoom()
         remoteController.disconnect()
@@ -307,8 +473,12 @@ class RemoteHelpCoordinator(
                 )
             )
         }
+        store.clearPendingHelperSession()
         _uiState.value = _uiState.value.copy(
             history = store.loadHistory(),
+            inviteEntry = if (clearInviteEntry) "" else _uiState.value.inviteEntry,
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
             activeSession = null,
             currentScreen = AppScreen.DASHBOARD,
             bannerMessage = reason
@@ -336,9 +506,9 @@ class RemoteHelpCoordinator(
 
     private fun currentSideDisplayName(session: ActiveHelpSession): String {
         return if (_uiState.value.side == DeviceSide.HELPER) {
-            session.helperName.ifBlank { "子女端" }
+            session.helperName.ifBlank { "我要协助" }
         } else {
-            session.elderName.ifBlank { "长辈端" }
+            session.elderName.ifBlank { "需要协助" }
         }
     }
 
@@ -371,7 +541,14 @@ class RemoteHelpCoordinator(
             SIGNAL_VERIFICATION_LEFT -> {
                 val requestId = payload.optString("requestId")
                 if (requestId == session.requestId) {
-                    onRemoteParticipantUnexpectedExit()
+                    onVerificationParticipantLeft()
+                }
+            }
+
+            SIGNAL_VERIFICATION_REQUESTED -> {
+                val requestId = payload.optString("requestId")
+                if (requestId == session.requestId && _uiState.value.side == DeviceSide.HELPER) {
+                    onVerificationPeerReady()
                 }
             }
         }
@@ -381,5 +558,6 @@ class RemoteHelpCoordinator(
         private const val SIGNAL_HELP_ACCEPT = "help_accept"
         private const val SIGNAL_HELP_REJECT = "help_reject"
         private const val SIGNAL_VERIFICATION_LEFT = "verification_left"
+        private const val SIGNAL_VERIFICATION_REQUESTED = "verification_requested"
     }
 }

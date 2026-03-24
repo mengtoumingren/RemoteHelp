@@ -1,8 +1,8 @@
 package com.timemotion.remotehelp.core
 
 enum class DeviceSide(val title: String, val subtitle: String) {
-    HELPER("子女端", "发起协助、视频核验、远程操作"),
-    ELDER("长辈端", "接收链接、确认身份、授权协助")
+    HELPER("我要协助", "发起协助、视频核验、远程操作"),
+    ELDER("需要协助", "接收链接、确认身份、授权协助")
 }
 
 enum class HelpStage(val title: String, val description: String) {
@@ -11,7 +11,7 @@ enum class HelpStage(val title: String, val description: String) {
     VERIFYING("视频核验中", "双方建立音视频通话，确认身份"),
     VERIFIED("已通过验证", "可以进入远程协助阶段"),
     ASSISTING("协助中", "屏幕共享和远程控制进行中"),
-    REJECTED("已拒绝", "长辈拒绝了本次协助"),
+    REJECTED("已拒绝", "对方拒绝了本次协助"),
     ENDED("已结束", "本次协助已结束")
 }
 
@@ -63,9 +63,11 @@ data class RemoteHelpUiState(
     val side: DeviceSide = DeviceSide.HELPER,
     val serverUrl: String = "ws://10.0.2.2:3000/ws",
     val helperName: String = "张三",
-    val elderName: String = "父亲",
+    val elderName: String = "联系人",
     val elderPhone: String = "13800138000",
     val inviteEntry: String = "",
+    val pendingInviteSession: ActiveHelpSession? = null,
+    val isVerificationRequestVisible: Boolean = false,
     val activeSession: ActiveHelpSession? = null,
     val recentContacts: List<RecentContact> = emptyList(),
     val history: List<SessionHistoryItem> = emptyList(),

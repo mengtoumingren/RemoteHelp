@@ -7,6 +7,41 @@ import org.json.JSONObject
 class LocalHistoryStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
+    fun loadPendingHelperSession(): ActiveHelpSession? {
+        val raw = preferences.getString(KEY_PENDING_HELPER_SESSION, null) ?: return null
+        return runCatching {
+            val item = JSONObject(raw)
+            ActiveHelpSession(
+                requestId = item.optString("requestId"),
+                helperName = item.optString("helperName"),
+                elderName = item.optString("elderName"),
+                elderPhone = item.optString("elderPhone"),
+                createdAt = item.optLong("createdAt"),
+                expiresAt = item.optLong("expiresAt"),
+                inviteToken = item.optString("inviteToken"),
+                deepLink = item.optString("deepLink"),
+                stage = HelpStage.REQUEST_CREATED
+            )
+        }.getOrNull()
+    }
+
+    fun savePendingHelperSession(session: ActiveHelpSession) {
+        val item = JSONObject()
+            .put("requestId", session.requestId)
+            .put("helperName", session.helperName)
+            .put("elderName", session.elderName)
+            .put("elderPhone", session.elderPhone)
+            .put("createdAt", session.createdAt)
+            .put("expiresAt", session.expiresAt)
+            .put("inviteToken", session.inviteToken)
+            .put("deepLink", session.deepLink)
+        preferences.edit().putString(KEY_PENDING_HELPER_SESSION, item.toString()).apply()
+    }
+
+    fun clearPendingHelperSession() {
+        preferences.edit().remove(KEY_PENDING_HELPER_SESSION).apply()
+    }
+
     fun loadRecentContacts(): List<RecentContact> {
         val raw = preferences.getString(KEY_RECENT_CONTACTS, null) ?: return emptyList()
         return runCatching {
@@ -113,6 +148,7 @@ class LocalHistoryStore(context: Context) {
         private const val PREF_NAME = "remote_help_local_history"
         private const val KEY_RECENT_CONTACTS = "recent_contacts"
         private const val KEY_HISTORY = "session_history"
+        private const val KEY_PENDING_HELPER_SESSION = "pending_helper_session"
         private const val MAX_ITEMS = 8
     }
 }

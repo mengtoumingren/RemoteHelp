@@ -11,7 +11,7 @@ private val dateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("
 fun formatDateTime(value: Long): String = dateTimeFormatter.format(Instant.ofEpochMilli(value))
 
 fun formatRemaining(expiresAt: Long, now: Long = System.currentTimeMillis()): String {
-    val totalSeconds = max(0L, (expiresAt - now) / 1000L)
+    val totalSeconds = max(0L, (expiresAt - now + 999L) / 1000L)
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%02d:%02d".format(minutes, seconds)
