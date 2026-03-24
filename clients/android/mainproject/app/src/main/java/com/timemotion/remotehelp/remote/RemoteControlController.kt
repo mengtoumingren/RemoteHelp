@@ -2,63 +2,46 @@ package com.timemotion.remotehelp.remote
 
 import android.content.Context
 import android.content.Intent
-import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
+import com.timemotion.remotehelp.core.AppLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import okhttp3.OkHttpClient
 import org.json.JSONObject
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
-import org.webrtc.IceCandidate
-import org.webrtc.MediaConstraints
-import org.webrtc.MediaStream
-import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
-import org.webrtc.RtpReceiver
-import org.webrtc.RtpSender
-import org.webrtc.ScreenCapturerAndroid
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
-import org.webrtc.SurfaceTextureHelper
-import org.webrtc.VideoSource
-import org.webrtc.VideoTrack
 import kotlin.math.roundToInt
-import com.timemotion.remotehelp.core.AppLog
-import com.timemotion.remotehelp.ui.UiFeedbackBus
 
 class RemoteControlController(
     context: Context
 ) {
     companion object {
-        private const val MAX_RTC_RECONNECT_ATTEMPTS = 4
-        private const val BASE_RTC_RECONNECT_DELAY_MS = 1000L
-        private const val MAX_RTC_RECONNECT_DELAY_MS = 10_000L
+        private const val SCREEN_SHARE_MIN_WIDTH = 360
+        private const val SCREEN_SHARE_MIN_HEIGHT = 640
+        private const val SCREEN_SHARE_MAX_LONG_SIDE = 2560
+        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 3_000_000
+        private const val SCREEN_SHARE_MAX_FPS = 12
+        private const val TARGET_STATUS_STARTING = "屏幕采集权限已授权，正在启动屏幕流"
+        private const val TARGET_STATUS_READY_WITH_ACCESSIBILITY = "屏幕流已启动，可接受远程协助"
+        private const val TARGET_STATUS_READY_NEED_ACCESSIBILITY = "屏幕流已启动，请开启无障碍服务"
     }
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val eglBase = EglBase.create()
-    private val okHttpClient = OkHttpClient.Builder().build()
+    private val okHttpClient = okhttp3.OkHttpClient.Builder().build()
     private val signalClient = RemoteSignalClient(okHttpClient, ::onSignalEvent)
-    private val pendingRemoteIce = mutableListOf<IceCandidate>()
 
     private val peerConnectionFactory: PeerConnectionFactory
 
-    private var peerConnection: PeerConnection? = null
-    private var surfaceTextureHelper: SurfaceTextureHelper? = null
-    private var screenCapturer: ScreenCapturerAndroid? = null
-    private var localVideoSource: VideoSource? = null
-    private var localScreenTrack: VideoTrack? = null
-    private var remoteVideoTrack: VideoTrack? = null
-    private var localVideoSender: RtpSender? = null
-    private var isMakingOffer = false
-    private var allowRtcReconnect = false
-    private var rtcReconnectAttempt = 0
-    private var rtcReconnectRunnable: Runnable? = null
+    var onScreenShareStartRequested: ((Intent) -> Boolean)? = null
+    var onScreenShareStopRequested: (() -> Unit)? = null
+    private var isForegroundServiceActive = false
+    private var pendingScreenCaptureData: Intent? = null
+    private var pendingScreenCaptureProfile: CaptureProfile? = null
 
     private val _uiState = MutableStateFlow(RemoteControlUiState())
     val uiState: StateFlow<RemoteControlUiState> = _uiState.asStateFlow()
@@ -105,9 +88,6 @@ class RemoteControlController(
             pushStatus("请填写服务地址和房间号")
             return
         }
-        allowRtcReconnect = true
-        cancelRtcReconnect()
-        rtcReconnectAttempt = 0
         pushStatus("连接中")
         signalClient.connect(
             url = state.serverUrl.trim(),
@@ -118,10 +98,7 @@ class RemoteControlController(
     }
 
     fun disconnect() {
-        allowRtcReconnect = false
-        cancelRtcReconnect()
         stopScreenShare()
-        clearPeerConnection()
         signalClient.disconnect()
         _uiState.value = _uiState.value.copy(
             isConnected = false,
@@ -154,24 +131,29 @@ class RemoteControlController(
             pushStatus("当前不是被协助端")
             return
         }
+        if (_uiState.value.targetStatus.captureActive) {
+            pushStatus("屏幕流已启动")
+            return
+        }
+
         val captureProfile = currentCaptureProfile()
-        ScreenCaptureForegroundService.start(appContext, currentNotificationText())
-        mainHandler.postDelayed({
-            startScreenShareInternal(data, captureProfile.captureWidth, captureProfile.captureHeight)
-            updateTargetStatus(
-                _uiState.value.targetStatus.copy(
-                    captureActive = true,
-                    accessibilityEnabled = isAccessibilityEnabled(),
-                    softKeyboardHidden = isSoftKeyboardHidden(),
-                    message = if (isAccessibilityEnabled()) "屏幕流已启动，可接受远程协助" else "屏幕流已启动，请开启无障碍服务",
-                    screenWidth = captureProfile.screenWidth,
-                    screenHeight = captureProfile.screenHeight
-                )
+        updateTargetStatus(
+            _uiState.value.targetStatus.copy(
+                captureActive = false,
+                accessibilityEnabled = isAccessibilityEnabled(),
+                softKeyboardHidden = isSoftKeyboardHidden(),
+                message = TARGET_STATUS_STARTING,
+                screenWidth = captureProfile.screenWidth,
+                screenHeight = captureProfile.screenHeight
             )
-            if (resultCode != 0 && hasControllerPeer()) {
-                maybeStartStreamingOffer()
-            }
-        }, 250)
+        )
+        pushStatus("已授权屏幕采集，正在启动屏幕流")
+        pendingScreenCaptureData = data
+        pendingScreenCaptureProfile = captureProfile
+        ScreenCaptureForegroundService.start(appContext, currentNotificationText())
+        if (isForegroundServiceActive) {
+            mainHandler.post { startPendingScreenCapture() }
+        }
     }
 
     fun sendCommand(command: RemoteCommand) {
@@ -257,16 +239,23 @@ class RemoteControlController(
 
     fun refreshLocalCapabilities() {
         val captureProfile = currentCaptureProfile()
+        val current = _uiState.value.targetStatus
+        val pendingStates = setOf(
+            TARGET_STATUS_STARTING
+        )
+        val neutralStates = setOf("等待重新连接", "屏幕采集启动失败", "前台投屏服务已关闭")
+        val message = when {
+            current.captureActive && isAccessibilityEnabled() -> TARGET_STATUS_READY_WITH_ACCESSIBILITY
+            current.captureActive -> TARGET_STATUS_READY_NEED_ACCESSIBILITY
+            current.message in pendingStates -> current.message
+            current.message in neutralStates -> "请先授权屏幕采集"
+            else -> current.message
+        }
         updateTargetStatus(
-            _uiState.value.targetStatus.copy(
+            current.copy(
                 accessibilityEnabled = isAccessibilityEnabled(),
                 softKeyboardHidden = isSoftKeyboardHidden(),
-                message = when {
-                    _uiState.value.selectedRole != RemoteRole.TARGET -> _uiState.value.targetStatus.message
-                    _uiState.value.targetStatus.captureActive && isAccessibilityEnabled() -> "屏幕流已就绪，可接受远控"
-                    _uiState.value.targetStatus.captureActive -> "屏幕流已启动，请开启无障碍服务"
-                    else -> "请先授权屏幕采集"
-                },
+                message = message,
                 screenWidth = captureProfile.screenWidth,
                 screenHeight = captureProfile.screenHeight
             )
@@ -274,8 +263,6 @@ class RemoteControlController(
     }
 
     fun release() {
-        allowRtcReconnect = false
-        cancelRtcReconnect()
         disconnect()
         RemoteAccessibilityService.stateListener = null
         RemoteAccessibilityService.softKeyboardStateListener = null
@@ -286,286 +273,22 @@ class RemoteControlController(
         okHttpClient.dispatcher.executorService.shutdown()
     }
 
-    private fun startScreenShareInternal(permissionData: Intent, captureWidth: Int, captureHeight: Int) {
-        stopLocalTrackOnly()
-        val helper = SurfaceTextureHelper.create("ScreenShareCaptureThread", eglBase.eglBaseContext)
-        val source = peerConnectionFactory.createVideoSource(true)
-        val capturer = ScreenCapturerAndroid(
-            permissionData,
-            object : MediaProjection.Callback() {
-                override fun onStop() {
-                    mainHandler.post {
-                        stopScreenShare()
-                        updateTargetStatus(
-                            _uiState.value.targetStatus.copy(
-                                captureActive = false,
-                                accessibilityEnabled = isAccessibilityEnabled(),
-                                softKeyboardHidden = isSoftKeyboardHidden(),
-                                message = "系统停止了屏幕采集"
-                            )
-                        )
-                    }
-                }
-            }
-        )
-        capturer.initialize(helper, appContext, source.capturerObserver)
-        capturer.startCapture(captureWidth, captureHeight, SCREEN_SHARE_MAX_FPS)
-        surfaceTextureHelper = helper
-        screenCapturer = capturer
-        localVideoSource = source
-        localScreenTrack = peerConnectionFactory.createVideoTrack("remote-screen-track", source)
-        publishRendererBindings()
-        clearPeerConnection()
-        maybeStartStreamingOffer()
-    }
-
     private fun stopScreenShare() {
+        pendingScreenCaptureData = null
+        pendingScreenCaptureProfile = null
+        onScreenShareStopRequested?.invoke()
         ScreenCaptureForegroundService.stop(appContext)
-        stopLocalTrackOnly()
-        clearPeerConnection()
     }
 
-    private fun stopLocalTrackOnly() {
-        runCatching { screenCapturer?.stopCapture() }
-        screenCapturer?.dispose()
-        localScreenTrack?.dispose()
-        localVideoSource?.dispose()
-        surfaceTextureHelper?.dispose()
-        screenCapturer = null
-        localScreenTrack = null
-        localVideoSource = null
-        localVideoSender = null
-        surfaceTextureHelper = null
-        publishRendererBindings()
-    }
-
-    private fun createPeerConnectionIfNeeded(): PeerConnection {
-        peerConnection?.let { return it }
-        val config = PeerConnection.RTCConfiguration(
-            listOf(PeerConnection.IceServer.builder("stun:stun.timemotion.top:3478").createIceServer())
-        ).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-        }
-        val connection = peerConnectionFactory.createPeerConnection(
-            config,
-            object : PeerConnection.Observer {
-                override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
-                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                    if (state == PeerConnection.IceConnectionState.CONNECTED ||
-                        state == PeerConnection.IceConnectionState.COMPLETED
-                    ) {
-                        cancelRtcReconnect()
-                    }
-                    if (state == PeerConnection.IceConnectionState.FAILED ||
-                        state == PeerConnection.IceConnectionState.CLOSED
-                    ) {
-                        handleRtcConnectionLost("ICE: $state")
-                    }
-                    pushStatus("ICE: $state")
-                }
-                override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
-                override fun onIceCandidate(candidate: IceCandidate) {
-                    signalClient.sendSignal(
-                        signalType = "candidate",
-                        payload = JSONObject()
-                            .put("sdpMid", candidate.sdpMid)
-                            .put("sdpMLineIndex", candidate.sdpMLineIndex)
-                            .put("candidate", candidate.sdp)
-                    )
-                }
-                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
-                override fun onAddStream(stream: MediaStream) = Unit
-                override fun onRemoveStream(stream: MediaStream) = Unit
-                override fun onDataChannel(dataChannel: org.webrtc.DataChannel) = Unit
-                override fun onRenegotiationNeeded() = Unit
-                override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
-                    val track = receiver.track() as? VideoTrack ?: return
-                    remoteVideoTrack = track
-                    publishRendererBindings()
-                }
-            }
-        ) ?: error("Failed to create peer connection")
-
-        if (_uiState.value.selectedRole == RemoteRole.TARGET) {
-            localScreenTrack?.let { track ->
-                localVideoSender = connection.addTrack(track)
-                configureLocalVideoSender()
-            }
-        }
-        peerConnection = connection
-        return connection
-    }
-
-    private fun maybeStartStreamingOffer() {
-        if (_uiState.value.selectedRole != RemoteRole.TARGET) return
-        if (localScreenTrack == null || !hasControllerPeer() || isMakingOffer) return
-        val connection = createPeerConnectionIfNeeded()
-        isMakingOffer = true
-        connection.createOffer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(description: SessionDescription) {
-                connection.setLocalDescription(object : SimpleSdpObserver() {
-                    override fun onSetSuccess() {
-                        signalClient.sendSignal(
-                            signalType = "offer",
-                            payload = JSONObject().put("sdp", description.description)
-                        )
-                        isMakingOffer = false
-                        pushStatus("已发送屏幕流 offer")
-                    }
-
-                    override fun onSetFailure(error: String) {
-                        isMakingOffer = false
-                        pushStatus("设置本地 offer 失败: $error")
-                    }
-                }, description)
-            }
-
-            override fun onCreateFailure(error: String) {
-                isMakingOffer = false
-                pushStatus("创建屏幕流 offer 失败: $error")
-            }
-        }, MediaConstraints())
-    }
-
-    private fun handleOffer(payload: JSONObject) {
-        val connection = createPeerConnectionIfNeeded()
-        val offer = SessionDescription(SessionDescription.Type.OFFER, payload.getString("sdp"))
-        connection.setRemoteDescription(object : SimpleSdpObserver() {
-            override fun onSetSuccess() {
-                flushPendingIce()
-                connection.createAnswer(object : SimpleSdpObserver() {
-                    override fun onCreateSuccess(description: SessionDescription) {
-                        connection.setLocalDescription(object : SimpleSdpObserver() {
-                            override fun onSetSuccess() {
-                                signalClient.sendSignal(
-                                    signalType = "answer",
-                                    payload = JSONObject().put("sdp", description.description)
-                                )
-                                pushStatus("已发送 answer")
-                            }
-                        }, description)
-                    }
-                }, MediaConstraints())
-            }
-
-            override fun onSetFailure(error: String) {
-                pushStatus("设置远端 offer 失败: $error")
-            }
-        }, offer)
-    }
-
-    private fun handleAnswer(payload: JSONObject) {
-        val connection = peerConnection ?: return
-        val answer = SessionDescription(SessionDescription.Type.ANSWER, payload.getString("sdp"))
-        connection.setRemoteDescription(object : SimpleSdpObserver() {
-            override fun onSetSuccess() {
-                flushPendingIce()
-                pushStatus("远端 answer 已应用")
-            }
-        }, answer)
-    }
-
-    private fun handleCandidate(payload: JSONObject) {
-        val candidate = IceCandidate(
-            payload.optString("sdpMid"),
-            payload.getInt("sdpMLineIndex"),
-            payload.getString("candidate")
-        )
-        val connection = peerConnection
-        if (connection == null || connection.remoteDescription == null) {
-            pendingRemoteIce += candidate
-        } else {
-            connection.addIceCandidate(candidate)
-        }
-    }
-
-    private fun flushPendingIce() {
-        val connection = peerConnection ?: return
-        if (connection.remoteDescription == null) return
-        pendingRemoteIce.forEach(connection::addIceCandidate)
-        pendingRemoteIce.clear()
-    }
-
-    private fun clearPeerConnection(resetRtcRetryState: Boolean = true) {
-        if (resetRtcRetryState) {
-            cancelRtcReconnect()
-            rtcReconnectAttempt = 0
-        }
-        remoteVideoTrack = null
-        localVideoSender = null
-        pendingRemoteIce.clear()
-        isMakingOffer = false
-        peerConnection?.close()
-        peerConnection?.dispose()
-        peerConnection = null
-        publishRendererBindings()
-    }
-
-    private fun handleRtcConnectionLost(status: String) {
-        if (!allowRtcReconnect || _uiState.value.selectedRole != RemoteRole.TARGET || !isConnected() || !hasControllerPeer()) {
-            clearPeerConnection()
-            return
-        }
-        cancelRtcReconnect()
-        clearPeerConnection(resetRtcRetryState = false)
-        scheduleRtcReconnect(status)
-    }
-
-    private fun scheduleRtcReconnect(message: String) {
-        if (!allowRtcReconnect || _uiState.value.selectedRole != RemoteRole.TARGET || !isConnected() || !hasControllerPeer()) {
-            clearPeerConnection()
-            return
-        }
-        if (rtcReconnectAttempt >= MAX_RTC_RECONNECT_ATTEMPTS) {
-            clearPeerConnection()
-            pushStatus("RTC 重连失败: $message")
-            UiFeedbackBus.emitTopToast("远控画面重连失败，请检查网络后重试")
-            return
-        }
-        val delayMs = (BASE_RTC_RECONNECT_DELAY_MS shl rtcReconnectAttempt).coerceAtMost(MAX_RTC_RECONNECT_DELAY_MS)
-        rtcReconnectAttempt += 1
-        pushStatus("RTC 断开，${delayMs / 1000}s 后重连")
-        if (rtcReconnectAttempt == 1) {
-            UiFeedbackBus.emitTopToast("网络异常，远控画面正在重连")
-        }
-        cancelRtcReconnect()
-        rtcReconnectRunnable = Runnable {
-            if (!allowRtcReconnect || _uiState.value.selectedRole != RemoteRole.TARGET || !isConnected() || !hasControllerPeer()) {
-                return@Runnable
-            }
-            maybeStartStreamingOffer()
-        }
-        mainHandler.postDelayed(rtcReconnectRunnable!!, delayMs)
-    }
-
-    private fun cancelRtcReconnect() {
-        rtcReconnectRunnable?.let(mainHandler::removeCallbacks)
-        rtcReconnectRunnable = null
-        rtcReconnectAttempt = 0
-    }
-
-    private fun isConnected(): Boolean = _uiState.value.isConnected
-
-    private fun publishRendererBindings() {
-        val localBinding = localScreenTrack?.let { track ->
-            VideoRendererBinding(
-                eglBaseContext = eglBase.eglBaseContext,
-                mirror = false,
-                attach = { renderer -> track.addSink(renderer) },
-                detach = { renderer -> track.removeSink(renderer) }
-            )
-        }
-        val remoteBinding = remoteVideoTrack?.let { track ->
-            VideoRendererBinding(
-                eglBaseContext = eglBase.eglBaseContext,
-                mirror = false,
-                attach = { renderer -> track.addSink(renderer) },
-                detach = { renderer -> track.removeSink(renderer) }
-            )
-        }
-        _uiState.value = _uiState.value.copy(localRenderer = localBinding, remoteRenderer = remoteBinding)
+    private fun currentCaptureProfile(): CaptureProfile {
+        val metrics = appContext.readDeviceScreenMetrics()
+        val screenWidth = metrics.width
+        val screenHeight = metrics.height
+        val longSide = maxOf(screenWidth, screenHeight)
+        val scale = minOf(1f, SCREEN_SHARE_MAX_LONG_SIDE.toFloat() / longSide.toFloat())
+        val captureWidth = (screenWidth * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_WIDTH).ensureEven()
+        val captureHeight = (screenHeight * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_HEIGHT).ensureEven()
+        return CaptureProfile(screenWidth, screenHeight, captureWidth, captureHeight)
     }
 
     private fun onSignalEvent(event: RemoteSignalEvent) {
@@ -585,21 +308,10 @@ class RemoteControlController(
                             status = "已加入房间"
                         )
                         appendLog("加入房间成功")
-                        if (_uiState.value.selectedRole == RemoteRole.TARGET) {
-                            refreshForegroundNotification()
-                            publishTargetStatus()
-                            maybeStartStreamingOffer()
-                        }
                     }
                     is RemoteSignalEvent.PeerUpdate -> {
                         _uiState.value = _uiState.value.copy(peers = event.peers)
                         appendLog("成员更新: ${event.peers.joinToString { "${it.displayName}-${it.role.title}" }}")
-                        if (_uiState.value.selectedRole == RemoteRole.TARGET) {
-                            refreshForegroundNotification()
-                            maybeStartStreamingOffer()
-                        } else if (!hasTargetPeer()) {
-                            clearPeerConnection()
-                        }
                     }
                     is RemoteSignalEvent.TargetStatusReceived -> {
                         _uiState.value = _uiState.value.copy(targetStatus = event.status)
@@ -633,25 +345,10 @@ class RemoteControlController(
                         )
                         appendLog("${event.fromDisplayName} -> ${event.command.action.name}")
                     }
-                    is RemoteSignalEvent.SignalReceived -> {
-                        when (event.signalType) {
-                            "offer" -> handleOffer(event.payload)
-                            "answer" -> handleAnswer(event.payload)
-                            "candidate" -> handleCandidate(event.payload)
-                        }
-                    }
+                    is RemoteSignalEvent.SignalReceived -> Unit
                     is RemoteSignalEvent.Error -> pushStatus(event.message)
                     is RemoteSignalEvent.Disconnected -> {
-                        cancelRtcReconnect()
-                        allowRtcReconnect = false
-                        clearPeerConnection()
-                        _uiState.value = _uiState.value.copy(
-                            isConnected = false,
-                            peers = emptyList(),
-                            status = "连接关闭"
-                        )
-                        appendLog("连接已关闭")
-                        refreshForegroundNotification()
+                        allowDisconnectCleanup()
                     }
                 }
             }.onFailure {
@@ -661,61 +358,98 @@ class RemoteControlController(
         }
     }
 
+    private fun allowDisconnectCleanup() {
+        stopScreenShare()
+        updateTargetStatus(
+            _uiState.value.targetStatus.copy(
+                captureActive = false,
+                accessibilityEnabled = isAccessibilityEnabled(),
+                softKeyboardHidden = isSoftKeyboardHidden(),
+                message = "等待重新连接"
+            )
+        )
+        _uiState.value = _uiState.value.copy(
+            isConnected = false,
+            peers = emptyList(),
+            status = "连接关闭"
+        )
+        appendLog("连接已关闭")
+        refreshForegroundNotification()
+    }
+
     private fun onForegroundServiceChanged(active: Boolean) {
         mainHandler.post {
+            isForegroundServiceActive = active
+            val current = _uiState.value.targetStatus
+            if (active && pendingScreenCaptureData != null && !current.captureActive) {
+                startPendingScreenCapture()
+                return@post
+            }
+            val pendingStates = setOf(TARGET_STATUS_STARTING)
+            val neutralStates = setOf("等待重新连接", "屏幕采集启动失败", "前台投屏服务已关闭")
+            val message = when {
+                active && current.message in pendingStates -> current.message
+                active && current.captureActive -> current.message
+                active -> "前台投屏服务已启动"
+                current.captureActive -> "前台投屏服务已关闭"
+                current.message in pendingStates -> "屏幕采集中断"
+                current.message in neutralStates -> "请先授权屏幕采集"
+                else -> current.message
+            }
             updateTargetStatus(
-                _uiState.value.targetStatus.copy(
-                    captureActive = active || localScreenTrack != null,
+                current.copy(
+                    captureActive = if (active) current.captureActive else false,
                     accessibilityEnabled = isAccessibilityEnabled(),
                     softKeyboardHidden = isSoftKeyboardHidden(),
-                    message = if (active || localScreenTrack != null) "前台投屏服务已启动" else "前台投屏服务已关闭"
+                    message = message
                 )
             )
         }
     }
 
-    private fun hasControllerPeer(): Boolean = _uiState.value.peers.any { it.role == RemoteRole.CONTROLLER }
-    private fun hasTargetPeer(): Boolean = _uiState.value.peers.any { it.role == RemoteRole.TARGET }
-
-    private fun currentCaptureProfile(): CaptureProfile {
-        val metrics = appContext.readDeviceScreenMetrics()
-        val screenWidth = metrics.width
-        val screenHeight = metrics.height
-        val longSide = maxOf(screenWidth, screenHeight)
-        val scale = minOf(1f, SCREEN_SHARE_MAX_LONG_SIDE.toFloat() / longSide.toFloat())
-        val captureWidth = (screenWidth * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_WIDTH).ensureEven()
-        val captureHeight = (screenHeight * scale).roundToInt().coerceAtLeast(SCREEN_SHARE_MIN_HEIGHT).ensureEven()
-        return CaptureProfile(screenWidth, screenHeight, captureWidth, captureHeight)
-    }
-
-    private fun configureLocalVideoSender() {
-        val sender = localVideoSender ?: return
-        val parameters = sender.parameters
-        val encodings = parameters.encodings
-        if (encodings.isEmpty()) return
-        encodings.forEach { encoding ->
-            encoding.maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS
-            encoding.minBitrateBps = null
-            encoding.maxFramerate = SCREEN_SHARE_MAX_FPS
-            encoding.scaleResolutionDownBy = 1.0
-        }
-        runCatching { sender.parameters = parameters }
-            .onFailure { appendLog("应用视频编码参数失败: ${it.message ?: "unknown"}") }
-    }
-
-    private fun publishTargetStatus() {
-        val status = _uiState.value.targetStatus.copy(
-            accessibilityEnabled = isAccessibilityEnabled(),
-            softKeyboardHidden = isSoftKeyboardHidden(),
-            captureActive = localScreenTrack != null
-        )
-        signalClient.sendTargetStatus(status)
-    }
-
-    private fun updateTargetStatus(status: RemoteTargetStatus) {
-        _uiState.value = _uiState.value.copy(targetStatus = status)
-        if (_uiState.value.selectedRole == RemoteRole.TARGET && _uiState.value.isConnected) {
-            signalClient.sendTargetStatus(status)
+    private fun startPendingScreenCapture() {
+        val data = pendingScreenCaptureData ?: return
+        val captureProfile = pendingScreenCaptureProfile ?: currentCaptureProfile()
+        runCatching {
+            AppLog.d(
+                "RemoteControlController",
+                "开始触发屏幕共享, foregroundActive=$isForegroundServiceActive, captureActive=${_uiState.value.targetStatus.captureActive}"
+            )
+            val started = onScreenShareStartRequested?.invoke(data) == true
+            if (!started) {
+                throw IllegalStateException("屏幕共享通道未准备好")
+            }
+            pendingScreenCaptureData = null
+            pendingScreenCaptureProfile = null
+            updateTargetStatus(
+                _uiState.value.targetStatus.copy(
+                    captureActive = true,
+                    accessibilityEnabled = isAccessibilityEnabled(),
+                    softKeyboardHidden = isSoftKeyboardHidden(),
+                    message = if (isAccessibilityEnabled()) {
+                        TARGET_STATUS_READY_WITH_ACCESSIBILITY
+                    } else {
+                        TARGET_STATUS_READY_NEED_ACCESSIBILITY
+                    },
+                    screenWidth = captureProfile.screenWidth,
+                    screenHeight = captureProfile.screenHeight
+                )
+            )
+            pushStatus("屏幕共享已启动")
+        }.onFailure {
+            pendingScreenCaptureData = null
+            pendingScreenCaptureProfile = null
+            stopScreenShare()
+            updateTargetStatus(
+                _uiState.value.targetStatus.copy(
+                    captureActive = false,
+                    accessibilityEnabled = isAccessibilityEnabled(),
+                    softKeyboardHidden = isSoftKeyboardHidden(),
+                    message = "屏幕采集启动失败"
+                )
+            )
+            pushStatus("启动屏幕共享失败: ${it.message ?: "unknown"}")
+            AppLog.logThrowable("RemoteControlController", it, "启动屏幕共享失败")
         }
     }
 
@@ -726,8 +460,8 @@ class RemoteControlController(
         val current = _uiState.value.targetStatus
         val message = when {
             _uiState.value.selectedRole != RemoteRole.TARGET -> current.message
-            current.captureActive && enabled -> "屏幕流已就绪，可接受远控"
-            current.captureActive -> "屏幕流已启动，请开启无障碍服务"
+            current.captureActive && enabled -> TARGET_STATUS_READY_WITH_ACCESSIBILITY
+            current.captureActive -> TARGET_STATUS_READY_NEED_ACCESSIBILITY
             enabled -> "无障碍服务已开启，请继续授权屏幕采集"
             else -> current.message
         }
@@ -760,6 +494,13 @@ class RemoteControlController(
         }
     }
 
+    private fun updateTargetStatus(status: RemoteTargetStatus) {
+        _uiState.value = _uiState.value.copy(targetStatus = status)
+        if (_uiState.value.selectedRole == RemoteRole.TARGET && _uiState.value.isConnected) {
+            signalClient.sendTargetStatus(status)
+        }
+    }
+
     private fun pushStatus(message: String) {
         _uiState.value = _uiState.value.copy(status = message)
     }
@@ -777,16 +518,3 @@ private data class CaptureProfile(
 )
 
 private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
-
-private const val SCREEN_SHARE_MIN_WIDTH = 360
-private const val SCREEN_SHARE_MIN_HEIGHT = 640
-private const val SCREEN_SHARE_MAX_LONG_SIDE = 2560
-private const val SCREEN_SHARE_MAX_BITRATE_BPS = 3_000_000
-private const val SCREEN_SHARE_MAX_FPS = 12
-
-private open class SimpleSdpObserver : SdpObserver {
-    override fun onCreateSuccess(description: SessionDescription) = Unit
-    override fun onSetSuccess() = Unit
-    override fun onCreateFailure(error: String) = Unit
-    override fun onSetFailure(error: String) = Unit
-}

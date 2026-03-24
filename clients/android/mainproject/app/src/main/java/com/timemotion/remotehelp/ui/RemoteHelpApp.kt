@@ -328,7 +328,7 @@ fun RemoteHelpApp(
     }
     if (
         uiState.side == DeviceSide.HELPER &&
-        uiState.currentScreen == AppScreen.ASSIST &&
+        uiState.currentScreen == AppScreen.VERIFICATION &&
         uiState.activeSession != null
     ) {
         KeepAliveVerificationCallHost(callState = callState)
@@ -491,6 +491,7 @@ fun RemoteHelpApp(
                 helperName = uiState.activeSession?.helperName ?: uiState.helperName,
                 elderName = uiState.activeSession?.elderName ?: uiState.elderName,
                 uiState = remoteState,
+                screenRenderer = if (remoteState.targetStatus.captureActive) callState.assistRenderer else null,
                 onEndClick = { coordinator.endCurrentSession() },
                 onRequestCapture = { projectionLauncher.launch(projectionIntent) },
                 onOpenAccessibilitySettings = {

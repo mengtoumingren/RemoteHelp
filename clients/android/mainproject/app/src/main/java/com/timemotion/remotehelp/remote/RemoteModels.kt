@@ -93,13 +93,6 @@ data class RemoteTargetStatus(
     }
 }
 
-data class VideoRendererBinding(
-    val eglBaseContext: org.webrtc.EglBase.Context,
-    val mirror: Boolean,
-    val attach: (org.webrtc.VideoSink) -> Unit,
-    val detach: (org.webrtc.VideoSink) -> Unit
-)
-
 data class RemoteControlUiState(
     val serverUrl: String = "ws://10.0.2.2:3000/ws",
     val roomId: String = "remote-device",
@@ -108,8 +101,6 @@ data class RemoteControlUiState(
     val isConnected: Boolean = false,
     val status: String = "等待连接",
     val peers: List<RemotePeer> = emptyList(),
-    val localRenderer: VideoRendererBinding? = null,
-    val remoteRenderer: VideoRendererBinding? = null,
     val targetStatus: RemoteTargetStatus = RemoteTargetStatus(),
     val logs: List<String> = listOf("远程协助控制台已就绪")
 )

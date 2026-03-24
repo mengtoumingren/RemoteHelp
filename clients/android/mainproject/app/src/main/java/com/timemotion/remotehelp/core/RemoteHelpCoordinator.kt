@@ -42,6 +42,8 @@ class RemoteHelpCoordinator(
     val uiState: StateFlow<RemoteHelpUiState> = _uiState.asStateFlow()
 
     init {
+        remoteController.onScreenShareStartRequested = callController::startScreenShareCapture
+        remoteController.onScreenShareStopRequested = callController::stopScreenShareCapture
         if (restoredHelperSession == null) {
             store.clearPendingHelperSession()
         } else {

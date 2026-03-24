@@ -54,7 +54,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
-import com.timemotion.remotehelp.remote.VideoRendererBinding as ControlBinding
+import com.timemotion.remotehelp.webrtc.VideoRendererBinding
+import android.widget.FrameLayout
+import android.view.ViewGroup
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
@@ -64,6 +66,7 @@ fun RemoteAssistScreen(
     helperName: String,
     elderName: String,
     uiState: RemoteControlUiState,
+    screenRenderer: VideoRendererBinding?,
     onEndClick: () -> Unit,
     onRequestCapture: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
@@ -116,7 +119,7 @@ fun RemoteAssistScreen(
                 {
                     HelperAssistBody(
                         modifier = Modifier.fillMaxSize(),
-                        screenRenderer = uiState.remoteRenderer,
+                        screenRenderer = screenRenderer,
                         screenAspectRatio = screenAspectRatio,
                         onFrameTap = onFrameTap,
                         onFrameSwipe = onFrameSwipe,
@@ -167,7 +170,7 @@ fun RemoteAssistScreen(
 @Composable
 private fun HelperAssistBody(
     modifier: Modifier,
-    screenRenderer: ControlBinding?,
+    screenRenderer: VideoRendererBinding?,
     screenAspectRatio: Float,
     onFrameTap: (Float, Float) -> Unit,
     onFrameSwipe: (Float, Float, Float, Float) -> Unit,
@@ -486,7 +489,7 @@ private fun calculateContentRect(size: IntSize, aspectRatio: Float): ContentRect
 
 @Composable
 private fun ControlRendererPanel(
-    renderer: ControlBinding?,
+    renderer: VideoRendererBinding?,
     placeholder: String,
     aspectRatio: Float,
     modifier: Modifier,
@@ -510,7 +513,9 @@ private fun ControlRendererPanel(
             init(renderer.eglBaseContext, null)
             setEnableHardwareScaler(true)
             setMirror(renderer.mirror)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            setZOrderMediaOverlay(true)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
     }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -528,73 +533,88 @@ private fun ControlRendererPanel(
         modifier = modifier
             .background(Color.Black)
             .onSizeChanged { size = it }
-            .then(
-                if (allowTouch) {
-                    Modifier
-                        .pointerInput(renderer, size) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = { offset ->
-                                    dragStart = calculateContentRect(size, aspectRatio)?.normalize(offset)
-                                    dragEnd = dragStart
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    dragEnd = calculateContentRect(size, aspectRatio)?.normalize(change.position)
-                                },
-                                onDragEnd = {
-                                    val start = dragStart
-                                    val end = dragEnd
-                                    dragStart = null
-                                    dragEnd = null
-                                    if (start != null && end != null) {
-                                        onFrameDrag(start.first, start.second, end.first, end.second)
-                                    }
-                                },
-                                onDragCancel = {
-                                    dragStart = null
-                                    dragEnd = null
+    ) {
+        AndroidView(
+            factory = {
+                FrameLayout(it).apply {
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    (surfaceView.parent as? ViewGroup)?.removeView(surfaceView)
+                    addView(
+                        surfaceView,
+                        FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        if (allowTouch) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(1f)
+                    .pointerInput(renderer, size) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { offset ->
+                                dragStart = calculateContentRect(size, aspectRatio)?.normalize(offset)
+                                dragEnd = dragStart
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                dragEnd = calculateContentRect(size, aspectRatio)?.normalize(change.position)
+                            },
+                            onDragEnd = {
+                                val start = dragStart
+                                val end = dragEnd
+                                dragStart = null
+                                dragEnd = null
+                                if (start != null && end != null) {
+                                    onFrameDrag(start.first, start.second, end.first, end.second)
                                 }
-                            )
-                        }
-                        .pointerInput(renderer, size) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    swipeStart = calculateContentRect(size, aspectRatio)?.normalize(offset)
-                                    swipeEnd = swipeStart
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    swipeEnd = calculateContentRect(size, aspectRatio)?.normalize(change.position)
-                                },
-                                onDragEnd = {
-                                    val start = swipeStart
-                                    val end = swipeEnd
-                                    swipeStart = null
-                                    swipeEnd = null
-                                    if (start != null && end != null) {
-                                        onFrameSwipe(start.first, start.second, end.first, end.second)
-                                    }
-                                },
-                                onDragCancel = {
-                                    swipeStart = null
-                                    swipeEnd = null
+                            },
+                            onDragCancel = {
+                                dragStart = null
+                                dragEnd = null
+                            }
+                        )
+                    }
+                    .pointerInput(renderer, size) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                swipeStart = calculateContentRect(size, aspectRatio)?.normalize(offset)
+                                swipeEnd = swipeStart
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                swipeEnd = calculateContentRect(size, aspectRatio)?.normalize(change.position)
+                            },
+                            onDragEnd = {
+                                val start = swipeStart
+                                val end = swipeEnd
+                                swipeStart = null
+                                swipeEnd = null
+                                if (start != null && end != null) {
+                                    onFrameSwipe(start.first, start.second, end.first, end.second)
                                 }
-                            )
-                        }
-                        .pointerInput(renderer, size) {
-                            detectTapGestures { offset ->
-                                val normalized = calculateContentRect(size, aspectRatio)?.normalize(offset)
-                                if (normalized != null) {
-                                    onFrameTap(normalized.first, normalized.second)
-                                }
+                            },
+                            onDragCancel = {
+                                swipeStart = null
+                                swipeEnd = null
+                            }
+                        )
+                    }
+                    .pointerInput(renderer, size) {
+                        detectTapGestures { offset ->
+                            val normalized = calculateContentRect(size, aspectRatio)?.normalize(offset)
+                            if (normalized != null) {
+                                onFrameTap(normalized.first, normalized.second)
                             }
                         }
-                } else {
-                    Modifier
-                }
+                    }
             )
-    ) {
-        AndroidView(factory = { surfaceView }, modifier = Modifier.fillMaxSize())
+        }
     }
 }
 

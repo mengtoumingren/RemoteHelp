@@ -1,7 +1,9 @@
 package com.timemotion.remotehelp.webrtc
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,14 +25,17 @@ import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RendererCommon
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpSender
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.UUID
 import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.remote.readDeviceScreenMetrics
 import com.timemotion.remotehelp.ui.UiFeedbackBus
 
 data class CallUiState(
@@ -46,7 +51,8 @@ data class CallUiState(
     val remotePeerName: String = "",
     val roomParticipantCount: Int = 0,
     val localRenderer: VideoRendererBinding? = null,
-    val remoteRenderer: VideoRendererBinding? = null
+    val remoteRenderer: VideoRendererBinding? = null,
+    val assistRenderer: VideoRendererBinding? = null
 )
 
 data class VideoRendererBinding(
@@ -64,6 +70,8 @@ class CallController(
         private const val LOCAL_CAPTURE_WIDTH = 1280
         private const val LOCAL_CAPTURE_HEIGHT = 720
         private const val LOCAL_CAPTURE_FPS = 30
+        private const val LOCAL_CAMERA_TRACK_ID = "verification-video"
+        private const val LOCAL_SCREEN_TRACK_ID = "screen-share-video"
         private const val MAX_RTC_RECONNECT_ATTEMPTS = 4
         private const val BASE_RTC_RECONNECT_DELAY_MS = 1000L
         private const val MAX_RTC_RECONNECT_DELAY_MS = 10_000L
@@ -83,9 +91,17 @@ class CallController(
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
     private var localVideoTrack: VideoTrack? = null
+    private var screenSurfaceTextureHelper: SurfaceTextureHelper? = null
+    private var screenCapturer: VideoCapturer? = null
+    private var screenVideoSource: VideoSource? = null
+    private var screenVideoTrack: VideoTrack? = null
     private var localAudioSource: AudioSource? = null
     private var localAudioTrack: AudioTrack? = null
+    private var localVideoSender: RtpSender? = null
+    private var screenVideoSender: RtpSender? = null
+    private var localAudioSender: RtpSender? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private var remoteScreenTrack: VideoTrack? = null
     private var remoteAudioTrack: AudioTrack? = null
     private var remoteClientId: String? = null
     private var isMakingOffer = false
@@ -136,6 +152,7 @@ class CallController(
     }
 
     fun startLocalMedia() {
+        ensureScreenShareTrack()
         if (localVideoTrack != null && localAudioTrack != null) {
             if (!isLocalCaptureStarted) {
                 resumeAfterForeground()
@@ -158,11 +175,12 @@ class CallController(
         surfaceTextureHelper = helper
         videoCapturer = capturer
         videoSource = source
-        localVideoTrack = peerConnectionFactory.createVideoTrack("local-video", source)
+        localVideoTrack = peerConnectionFactory.createVideoTrack(LOCAL_CAMERA_TRACK_ID, source)
         localAudioSource = peerConnectionFactory.createAudioSource(MediaConstraints())
         localAudioTrack = localAudioSource?.let {
             peerConnectionFactory.createAudioTrack("local-audio", it)
         }
+        ensureScreenShareTrack()
         attachLocalTracksToPeerConnection()
         configureAudioRoute()
         publishRendererBindings()
@@ -195,6 +213,14 @@ class CallController(
         cancelRtcReconnect()
         rtcReconnectAttempt = 0
         signalClient.leave()
+        disposeLocalCameraResources()
+        stopScreenShareCapture()
+        disposeScreenShareResources()
+        disposeCameraCaptureResources()
+        localAudioSource?.dispose()
+        localAudioSource = null
+        localAudioTrack?.dispose()
+        localAudioTrack = null
         clearPeerConnection()
         remoteClientId = null
         resetAudioRoute()
@@ -228,6 +254,64 @@ class CallController(
 
     fun toggleSpeakerOutput() {
         setSpeakerOutputEnabled(!_uiState.value.isSpeakerOn)
+    }
+
+    fun startScreenShareCapture(data: Intent): Boolean {
+        val track = ensureScreenShareTrack() ?: return false
+        if (screenCapturer != null) {
+            screenVideoTrack?.setEnabled(true)
+            screenVideoSender?.setTrack(screenVideoTrack, false)
+            return true
+        }
+        return runCatching {
+            AppLog.d("CallController", "开始屏幕共享采集, screenSender=${screenVideoSender != null}, peer=${peerConnection != null}")
+            val helper = SurfaceTextureHelper.create("ScreenShareCaptureThread", eglBase.eglBaseContext)
+            val source = screenVideoSource ?: error("屏幕视频源未初始化")
+            val metrics = context.readDeviceScreenMetrics()
+            val captureWidth = metrics.width.coerceAtLeast(1)
+            val captureHeight = metrics.height.coerceAtLeast(1)
+            val capturer = ScreenCapturerAndroid(
+                data,
+                object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        mainHandler.post {
+                            stopScreenShareCaptureInternal()
+                        }
+                    }
+                }
+            )
+            capturer.initialize(helper, context, source.capturerObserver)
+            capturer.startCapture(captureWidth, captureHeight, LOCAL_CAPTURE_FPS)
+            screenSurfaceTextureHelper = helper
+            screenCapturer = capturer
+            track.setEnabled(true)
+            screenVideoSender?.setTrack(track, false)
+            attachLocalTracksToPeerConnection()
+            AppLog.d("CallController", "屏幕共享采集已启动, sender=${screenVideoSender != null}, track=${track.id()}")
+            setStatus("屏幕共享已启动")
+            true
+        }.getOrElse {
+            AppLog.logThrowable("CallController", it, "启动屏幕共享失败")
+            setStatus("启动屏幕共享失败: ${it.message ?: "unknown"}")
+            false
+        }
+    }
+
+    fun stopScreenShareCapture() {
+        stopScreenShareCaptureInternal()
+        screenVideoTrack?.setEnabled(false)
+    }
+
+    private fun ensureScreenShareTrack(): VideoTrack? {
+        screenVideoTrack?.let { return it }
+        val source = peerConnectionFactory.createVideoSource(true)
+        val track = peerConnectionFactory.createVideoTrack(LOCAL_SCREEN_TRACK_ID, source)
+        track.setEnabled(false)
+        screenVideoSource = source
+        screenVideoTrack = track
+        AppLog.d("CallController", "创建屏幕视频轨, track=${track.id()}")
+        attachLocalTracksToPeerConnection()
+        return track
     }
 
     fun setSpeakerOutputEnabled(enabled: Boolean) {
@@ -333,9 +417,27 @@ class CallController(
                 override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
                     when (val track = receiver.track()) {
                         is VideoTrack -> {
-                            remoteVideoTrack = track
+                            val enabled = runCatching { track.enabled() }.getOrDefault(true)
+                            AppLog.d("CallController", "收到远端视频轨 id=${track.id()}, enabled=$enabled")
+                            val isScreenTrack = track.id() == LOCAL_SCREEN_TRACK_ID || !enabled
+                            val isCameraTrack = track.id() == LOCAL_CAMERA_TRACK_ID || enabled
+                            if (isScreenTrack && remoteScreenTrack == null) {
+                                remoteScreenTrack = track
+                            } else if (isCameraTrack && remoteVideoTrack == null) {
+                                remoteVideoTrack = track
+                            } else if (remoteVideoTrack == null) {
+                                remoteVideoTrack = track
+                            } else {
+                                remoteScreenTrack = track
+                            }
                             publishRendererBindings()
-                            setStatus("已接入对方画面")
+                            setStatus(
+                                if (track.id() == LOCAL_SCREEN_TRACK_ID) {
+                                    "已接入对方屏幕画面"
+                                } else {
+                                    "已接入对方画面"
+                                }
+                            )
                         }
                         is AudioTrack -> {
                             remoteAudioTrack = track
@@ -468,10 +570,14 @@ class CallController(
             rtcReconnectAttempt = 0
         }
         remoteVideoTrack = null
+        remoteScreenTrack = null
         remoteAudioTrack = null
         pendingRemoteIce.clear()
         isMakingOffer = false
         areLocalTracksAttached = false
+        localVideoSender = null
+        localAudioSender = null
+        screenVideoSender = null
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
@@ -528,6 +634,43 @@ class CallController(
         isLocalCaptureStarted = false
     }
 
+    private fun disposeLocalCameraResources() {
+        localVideoSender?.setTrack(null, false)
+        localVideoSender = null
+        localVideoTrack?.dispose()
+        localVideoTrack = null
+    }
+
+    private fun disposeCameraCaptureResources() {
+        stopLocalCapture()
+        videoCapturer?.dispose()
+        videoCapturer = null
+        videoSource?.dispose()
+        videoSource = null
+        surfaceTextureHelper?.dispose()
+        surfaceTextureHelper = null
+    }
+
+    private fun stopScreenShareCaptureInternal() {
+        val capturer = screenCapturer ?: return
+        screenCapturer = null
+        runCatching { capturer.stopCapture() }
+        capturer.dispose()
+        screenSurfaceTextureHelper?.dispose()
+        screenSurfaceTextureHelper = null
+        screenVideoTrack?.setEnabled(false)
+    }
+
+    private fun disposeScreenShareResources() {
+        stopScreenShareCaptureInternal()
+        screenVideoSender?.setTrack(null, false)
+        screenVideoSender = null
+        screenVideoTrack?.dispose()
+        screenVideoTrack = null
+        screenVideoSource?.dispose()
+        screenVideoSource = null
+    }
+
     private fun configureAudioRoute() {
         audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager?.isSpeakerphoneOn = _uiState.value.isSpeakerOn
@@ -542,6 +685,7 @@ class CallController(
         cancelRtcReconnect()
         rtcReconnectAttempt = 0
         remoteVideoTrack = null
+        remoteScreenTrack = null
         remoteAudioTrack = null
         remoteClientId = null
         _uiState.value = _uiState.value.copy(remotePeerName = "")
@@ -591,24 +735,43 @@ class CallController(
                 detach = { renderer -> track.removeSink(renderer) }
             )
         }
-        _uiState.value = _uiState.value.copy(localRenderer = localBinding, remoteRenderer = remoteBinding)
+        val assistBinding = remoteScreenTrack?.let { track ->
+            VideoRendererBinding(
+                eglBaseContext = eglBase.eglBaseContext,
+                mirror = false,
+                attach = { renderer ->
+                    if (renderer is org.webrtc.SurfaceViewRenderer) {
+                        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                    }
+                    track.addSink(renderer)
+                },
+                detach = { renderer -> track.removeSink(renderer) }
+            )
+        }
+        AppLog.d(
+            "CallController",
+            "刷新渲染绑定 local=${localBinding != null}, remote=${remoteBinding != null}, assist=${assistBinding != null}"
+        )
+        _uiState.value = _uiState.value.copy(
+            localRenderer = localBinding,
+            remoteRenderer = remoteBinding,
+            assistRenderer = assistBinding
+        )
     }
 
     private fun attachLocalTracksToPeerConnection(connection: PeerConnection? = peerConnection) {
         val targetConnection = connection ?: return
-        if (areLocalTracksAttached) {
-            return
+        if (localVideoTrack != null && localVideoSender == null) {
+            localVideoSender = targetConnection.addTrack(localVideoTrack)
         }
-        var attached = false
-        localVideoTrack?.let {
-            targetConnection.addTrack(it)
-            attached = true
+        if (localAudioTrack != null && localAudioSender == null) {
+            localAudioSender = targetConnection.addTrack(localAudioTrack)
         }
-        localAudioTrack?.let {
-            targetConnection.addTrack(it)
-            attached = true
+        if (screenVideoTrack != null && screenVideoSender == null) {
+            screenVideoSender = targetConnection.addTrack(screenVideoTrack)
         }
-        areLocalTracksAttached = attached
+        areLocalTracksAttached =
+            localVideoSender != null || localAudioSender != null || screenVideoSender != null
     }
 
     private fun onSignalEvent(event: SignalEvent) {
