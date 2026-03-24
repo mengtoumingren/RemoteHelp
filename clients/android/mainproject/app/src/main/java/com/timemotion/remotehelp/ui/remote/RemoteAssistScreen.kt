@@ -28,6 +28,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.remote.RemoteControlUiState
@@ -70,8 +72,7 @@ fun RemoteAssistScreen(
     onFrameDrag: (Float, Float, Float, Float) -> Unit,
     onSendBack: () -> Unit,
     onSendHome: () -> Unit,
-    onSendRecents: () -> Unit,
-    onToggleSoftKeyboard: () -> Unit
+    onSendRecents: () -> Unit
 ) {
     val screenAspectRatio = if (uiState.targetStatus.screenWidth > 0 && uiState.targetStatus.screenHeight > 0) {
         uiState.targetStatus.screenWidth.toFloat() / uiState.targetStatus.screenHeight.toFloat()
@@ -82,55 +83,48 @@ fun RemoteAssistScreen(
     var isMoreMenuVisible by remember { mutableStateOf(false) }
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
         if (side == DeviceSide.HELPER) {
-            Box(
+            Scaffold(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Brush.verticalGradient(listOf(Color(0xFF0E1724), Color(0xFF17283B), Color(0xFF23384D))))
-                    .systemBarsPadding()
-            ) {
-                HelperAssistBody(
-                    modifier = Modifier.fillMaxSize(),
-                    screenRenderer = uiState.remoteRenderer,
-                    screenAspectRatio = screenAspectRatio,
-                    onFrameTap = onFrameTap,
-                    onFrameSwipe = onFrameSwipe,
-                    onFrameDrag = onFrameDrag
-                )
-                AssistTopOverlay(
-                    title = "正在协助：$elderName",
-                    subtitle = uiState.targetStatus.message,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                )
-                HelperAssistBottomBar(
-                    onSendBack = onSendBack,
-                    onSendHome = onSendHome,
-                    onSendRecents = onSendRecents,
-                    onToggleKeyboard = onToggleSoftKeyboard,
-                    isKeyboardActive = !uiState.targetStatus.softKeyboardHidden,
-                    onOpenMore = { isMoreMenuVisible = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 54.dp)
-                ) {
-                    DropdownMenu(
-                        expanded = isMoreMenuVisible,
-                        onDismissRequest = { isMoreMenuVisible = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("结束协助") },
-                            onClick = {
-                                isMoreMenuVisible = false
-                                onEndClick()
-                            }
+                    .systemBarsPadding(),
+                bottomBar = {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        HelperAssistBottomBar(
+                            onSendBack = onSendBack,
+                            onSendHome = onSendHome,
+                            onSendRecents = onSendRecents,
+                            onEndClick = onEndClick,
+                            isMoreMenuVisible = isMoreMenuVisible,
+                            onOpenMore = { isMoreMenuVisible = true },
+                            onDismissMore = { isMoreMenuVisible = false },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
+                }
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                )
+                {
+                    HelperAssistBody(
+                        modifier = Modifier.fillMaxSize(),
+                        screenRenderer = uiState.remoteRenderer,
+                        screenAspectRatio = screenAspectRatio,
+                        onFrameTap = onFrameTap,
+                        onFrameSwipe = onFrameSwipe,
+                        onFrameDrag = onFrameDrag
+                    )
+                    AssistTopOverlay(
+                        title = "正在协助：$elderName",
+                        subtitle = uiState.targetStatus.message,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopStart)
+                            .zIndex(1f)
+                    )
                 }
             }
         } else {
@@ -178,16 +172,16 @@ private fun HelperAssistBody(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight()
-                .padding(horizontal = 4.dp),
-            contentAlignment = Alignment.Center
-        ) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .padding(horizontal = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
                     .aspectRatio(screenAspectRatio, matchHeightConstraintsFirst = true)
             ) {
                 ControlRendererPanel(
@@ -243,14 +237,16 @@ private fun HelperAssistBottomBar(
     onSendBack: () -> Unit,
     onSendHome: () -> Unit,
     onSendRecents: () -> Unit,
-    onToggleKeyboard: () -> Unit,
-    isKeyboardActive: Boolean,
+    onEndClick: () -> Unit,
+    isMoreMenuVisible: Boolean,
     onOpenMore: () -> Unit,
+    onDismissMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
-            .background(Color(0xAA122030)),
+            .background(Color(0xFF122030))
+            .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -275,23 +271,31 @@ private fun HelperAssistBottomBar(
                 onClick = onSendRecents,
                 modifier = Modifier.width(itemWidth)
             )
-            AssistFloatingButton(
-                title = "键盘",
-                onClick = onToggleKeyboard,
-                active = isKeyboardActive,
-                modifier = Modifier.width(itemWidth)
-            )
-            OutlinedButton(
-                onClick = onOpenMore,
-                modifier = Modifier.width(itemWidth),
-                shape = RoundedCornerShape(14.dp),
-                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color(0x22324458),
-                    contentColor = Color(0xFFE8EFF6)
-                )
-            ) {
-                Text("更多")
+            Box {
+                OutlinedButton(
+                    onClick = onOpenMore,
+                    modifier = Modifier.width(itemWidth),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color(0x22324458),
+                        contentColor = Color(0xFFE8EFF6)
+                    )
+                ) {
+                    Text("更多")
+                }
+                DropdownMenu(
+                    expanded = isMoreMenuVisible,
+                    onDismissRequest = onDismissMore
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("结束协助") },
+                        onClick = {
+                            onDismissMore()
+                            onEndClick()
+                        }
+                    )
+                }
             }
         }
     }
@@ -477,7 +481,7 @@ private fun ControlRendererPanel(
 ) {
     if (renderer == null) {
         Box(
-            modifier = modifier.background(Color(0xFF203040), RoundedCornerShape(20.dp)),
+            modifier = modifier.background(Color(0xFF203040)),
             contentAlignment = Alignment.Center
         ) {
             Text(placeholder, color = Color.White)
@@ -506,7 +510,7 @@ private fun ControlRendererPanel(
 
     Box(
         modifier = modifier
-            .background(Color.Black, RoundedCornerShape(20.dp))
+            .background(Color.Black)
             .onSizeChanged { size = it }
             .then(
                 if (allowTouch) {

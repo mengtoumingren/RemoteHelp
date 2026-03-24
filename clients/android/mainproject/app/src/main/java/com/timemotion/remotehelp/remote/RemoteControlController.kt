@@ -239,10 +239,6 @@ class RemoteControlController(
         sendCommand(RemoteCommand(action = RemoteAction.RECENTS))
     }
 
-    fun sendToggleSoftKeyboardCommand() {
-        sendCommand(RemoteCommand(action = RemoteAction.TOGGLE_SOFT_KEYBOARD))
-    }
-
     fun refreshLocalCapabilities() {
         val captureProfile = currentCaptureProfile()
         updateTargetStatus(
@@ -549,10 +545,6 @@ class RemoteControlController(
                             softKeyboardHidden = softKeyboardHidden,
                             message = when {
                                 !success -> "远控指令执行失败"
-                                event.command.action == RemoteAction.TOGGLE_SOFT_KEYBOARD && softKeyboardHidden ->
-                                    "${event.fromDisplayName} 已收起远端软键盘"
-                                event.command.action == RemoteAction.TOGGLE_SOFT_KEYBOARD ->
-                                    "${event.fromDisplayName} 已允许远端软键盘弹出"
                                 else -> "${event.fromDisplayName} 已执行 ${event.command.action.name}"
                             }
                         )
@@ -700,8 +692,8 @@ private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
 
 private const val SCREEN_SHARE_MIN_WIDTH = 360
 private const val SCREEN_SHARE_MIN_HEIGHT = 640
-private const val SCREEN_SHARE_MAX_LONG_SIDE = 960
-private const val SCREEN_SHARE_MAX_BITRATE_BPS = 1_500_000
+private const val SCREEN_SHARE_MAX_LONG_SIDE = 2560
+private const val SCREEN_SHARE_MAX_BITRATE_BPS = 3_000_000
 private const val SCREEN_SHARE_MAX_FPS = 12
 
 private open class SimpleSdpObserver : SdpObserver {

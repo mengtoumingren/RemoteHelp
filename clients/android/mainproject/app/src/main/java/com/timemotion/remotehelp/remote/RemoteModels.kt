@@ -17,7 +17,6 @@ enum class RemoteAction {
     TAP,
     SWIPE,
     DRAG,
-    TOGGLE_SOFT_KEYBOARD,
     BACK,
     HOME,
     RECENTS

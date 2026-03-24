@@ -1,6 +1,8 @@
 package com.timemotion.remotehelp.core
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import com.timemotion.remotehelp.remote.RemoteControlController
 import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.webrtc.CallController
@@ -15,6 +17,8 @@ class RemoteHelpCoordinator(
     private val appContext = context.applicationContext
     private val store = LocalHistoryStore(appContext)
     private val settingsStore = ConnectionSettingsStore(appContext)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var helperWaitTimeoutRunnable: Runnable? = null
     private val restoredHelperSession = store.loadPendingHelperSession()
         ?.takeUnless { it.isExpired() }
         ?.copy(stage = HelpStage.REQUEST_CREATED, verificationAcceptedAt = null, endReason = null)
@@ -38,6 +42,8 @@ class RemoteHelpCoordinator(
             store.clearPendingHelperSession()
         } else {
             configureCallController(restoredHelperSession)
+            ensureVerificationRoomConnected()
+            startHelperWaitTimeout(restoredHelperSession.requestId)
         }
     }
 
@@ -81,7 +87,7 @@ class RemoteHelpCoordinator(
                 createdAt = payload.createdAt,
                 expiresAt = payload.expiresAt,
                 inviteToken = token,
-                deepLink = HelpLinkCodec.buildDeepLink(token),
+                deepLink = HelpLinkCodec.buildDeepLink(token, payload.sessionId),
                 stage = HelpStage.VERIFYING
             )
             _uiState.value = _uiState.value.copy(
@@ -96,6 +102,8 @@ class RemoteHelpCoordinator(
                 currentScreen = AppScreen.DASHBOARD,
                 bannerMessage = "已识别协助链接，请确认信息后进入视频核验"
             )
+            configureCallController(session)
+            ensureVerificationRoomConnected()
         }.onFailure {
             callController.leaveRoom()
             remoteController.disconnect()
@@ -117,6 +125,8 @@ class RemoteHelpCoordinator(
             _uiState.value = state.copy(bannerMessage = "请先输入协助对象手机号")
             return
         }
+        cancelHelperWaitTimeout()
+        callController.leaveRoom()
         val now = System.currentTimeMillis()
         val (payload, token) = HelpLinkCodec.createInvite(
             helperName = state.helperName,
@@ -133,7 +143,7 @@ class RemoteHelpCoordinator(
             createdAt = payload.createdAt,
             expiresAt = payload.expiresAt,
             inviteToken = token,
-            deepLink = HelpLinkCodec.buildDeepLink(token),
+            deepLink = HelpLinkCodec.buildDeepLink(token, payload.sessionId),
             stage = HelpStage.REQUEST_CREATED
         )
         _uiState.value = state.copy(
@@ -147,6 +157,8 @@ class RemoteHelpCoordinator(
         )
         store.savePendingHelperSession(session)
         configureCallController(session)
+        ensureVerificationRoomConnected()
+        startHelperWaitTimeout(session.requestId)
     }
 
     fun applyRecentContact(contact: RecentContact) {
@@ -164,6 +176,7 @@ class RemoteHelpCoordinator(
             return
         }
         configureCallController(session)
+        ensureVerificationRoomConnected()
         _uiState.value = _uiState.value.copy(
             currentScreen = AppScreen.VERIFICATION,
             activeSession = session.copy(stage = HelpStage.VERIFYING),
@@ -184,6 +197,7 @@ class RemoteHelpCoordinator(
             return
         }
         configureCallController(session)
+        ensureVerificationRoomConnected()
         _uiState.value = _uiState.value.copy(
             side = DeviceSide.ELDER,
             activeSession = session,
@@ -211,6 +225,7 @@ class RemoteHelpCoordinator(
     }
 
     fun leaveVerification() {
+        cancelHelperWaitTimeout()
         val state = _uiState.value
         val session = state.activeSession
         if (session != null && !session.isExpired()) {
@@ -275,6 +290,7 @@ class RemoteHelpCoordinator(
     }
 
     fun onVerificationParticipantLeft() {
+        cancelHelperWaitTimeout()
         val state = _uiState.value
         val session = state.activeSession ?: return
         callController.leaveRoom()
@@ -322,9 +338,11 @@ class RemoteHelpCoordinator(
 
     fun onVerificationPeerReady() {
         val session = currentSessionOrNotify() ?: return
-        if (_uiState.value.currentScreen == AppScreen.VERIFICATION || _uiState.value.side != DeviceSide.HELPER) {
+        val state = _uiState.value
+        if (state.side != DeviceSide.HELPER || !state.shouldShowVerificationRequestDialog()) {
             return
         }
+        cancelHelperWaitTimeout()
         configureCallController(session)
         _uiState.value = _uiState.value.copy(
             activeSession = session.copy(stage = HelpStage.VERIFYING),
@@ -336,13 +354,25 @@ class RemoteHelpCoordinator(
 
     fun acceptVerificationRequest() {
         val session = currentSessionOrNotify() ?: return
-        configureCallController(session)
-        callController.leaveRoom()
+        cancelHelperWaitTimeout()
+        val acceptedSession = session.copy(
+            verificationAcceptedAt = System.currentTimeMillis()
+        )
+        _uiState.value = _uiState.value.copy(activeSession = acceptedSession)
+        configureCallController(acceptedSession)
+        if (!session.isExpired()) {
+            callController.sendAppSignal(
+                SIGNAL_VERIFICATION_ACCEPTED,
+                JSONObject().put("requestId", session.requestId),
+                broadcast = true
+            )
+        }
         _uiState.value = _uiState.value.copy(isVerificationRequestVisible = false)
         openVerification()
     }
 
     fun rejectVerificationRequest() {
+        cancelHelperWaitTimeout()
         val state = _uiState.value
         val session = state.activeSession ?: return
         if (state.side != DeviceSide.HELPER) {
@@ -369,6 +399,23 @@ class RemoteHelpCoordinator(
         )
     }
 
+    fun expirePendingInvite(reason: String) {
+        val state = _uiState.value
+        if (state.side != DeviceSide.ELDER || state.pendingInviteSession == null) {
+            return
+        }
+        cancelHelperWaitTimeout()
+        callController.leaveRoom()
+        _uiState.value = state.copy(
+            inviteEntry = "",
+            pendingInviteSession = null,
+            isVerificationRequestVisible = false,
+            activeSession = null,
+            currentScreen = AppScreen.DASHBOARD,
+            bannerMessage = reason
+        )
+    }
+
     fun acceptVerification() {
         val session = currentSessionOrNotify() ?: return
         callController.sendAppSignal(SIGNAL_HELP_ACCEPT, JSONObject().put("requestId", session.requestId))
@@ -391,7 +438,7 @@ class RemoteHelpCoordinator(
     fun notifyVerificationRequested() {
         val state = _uiState.value
         val session = state.activeSession ?: return
-        if (state.side != DeviceSide.ELDER || state.currentScreen != AppScreen.VERIFICATION || session.isExpired()) {
+        if (!state.shouldBroadcastVerificationRequested() || session.isExpired()) {
             return
         }
         callController.sendAppSignal(
@@ -463,11 +510,13 @@ class RemoteHelpCoordinator(
     }
 
     fun release() {
+        cancelHelperWaitTimeout()
         callController.release()
         remoteController.release()
     }
 
     private fun finishSession(reason: String, clearInviteEntry: Boolean = false) {
+        cancelHelperWaitTimeout()
         val session = _uiState.value.activeSession
         callController.leaveRoom()
         remoteController.disconnect()
@@ -500,6 +549,8 @@ class RemoteHelpCoordinator(
         callController.updateServerUrl(_uiState.value.serverUrl.trim())
         callController.updateRoomId(session.verificationRoomId)
         callController.updateDisplayName(currentSideDisplayName(session))
+        callController.setOfferInitiator(_uiState.value.side == DeviceSide.HELPER)
+        callController.setRtcOfferAllowed(session.verificationAcceptedAt != null)
     }
 
     private fun configureRemoteController(session: ActiveHelpSession) {
@@ -513,6 +564,43 @@ class RemoteHelpCoordinator(
                 RemoteRole.TARGET
             }
         )
+    }
+
+    private fun ensureVerificationRoomConnected() {
+        val callState = callController.uiState.value
+        if (callState.isInRoom || callState.isConnecting) {
+            return
+        }
+        callController.joinRoom(prepareLocalMedia = false)
+    }
+
+    private fun startHelperWaitTimeout(sessionId: String) {
+        cancelHelperWaitTimeout()
+        helperWaitTimeoutRunnable = Runnable {
+            val state = _uiState.value
+            val session = state.activeSession ?: return@Runnable
+            if (
+                state.side == DeviceSide.HELPER &&
+                state.currentScreen == AppScreen.SESSION &&
+                state.activeSession?.requestId == sessionId &&
+                session.stage == HelpStage.REQUEST_CREATED
+            ) {
+                callController.leaveRoom()
+                store.clearPendingHelperSession()
+                _uiState.value = state.copy(
+                    activeSession = null,
+                    isVerificationRequestVisible = false,
+                    currentScreen = AppScreen.DASHBOARD,
+                    bannerMessage = "长时间未收到对方接入，已自动断开"
+                )
+            }
+        }
+        mainHandler.postDelayed(helperWaitTimeoutRunnable!!, HELPER_WAIT_TIMEOUT_MS)
+    }
+
+    fun cancelHelperWaitTimeout() {
+        helperWaitTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        helperWaitTimeoutRunnable = null
     }
 
     private fun currentSideDisplayName(session: ActiveHelpSession): String {
@@ -562,13 +650,24 @@ class RemoteHelpCoordinator(
                     onVerificationPeerReady()
                 }
             }
+
+            SIGNAL_VERIFICATION_ACCEPTED -> {
+                val requestId = payload.optString("requestId")
+                if (requestId == session.requestId && _uiState.value.side == DeviceSide.ELDER) {
+                    _uiState.value = _uiState.value.copy(
+                        bannerMessage = "对方已接受视频认证，正在接入画面"
+                    )
+                }
+            }
         }
     }
 
     companion object {
+        private const val HELPER_WAIT_TIMEOUT_MS = 90_000L
         private const val SIGNAL_HELP_ACCEPT = "help_accept"
         private const val SIGNAL_HELP_REJECT = "help_reject"
         private const val SIGNAL_VERIFICATION_LEFT = "verification_left"
         private const val SIGNAL_VERIFICATION_REQUESTED = "verification_requested"
+        private const val SIGNAL_VERIFICATION_ACCEPTED = "verification_accepted"
     }
 }

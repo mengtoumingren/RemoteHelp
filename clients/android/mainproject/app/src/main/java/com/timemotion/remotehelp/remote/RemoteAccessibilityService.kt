@@ -107,7 +107,6 @@ class RemoteAccessibilityService : AccessibilityService() {
                 dispatchLongPressDragGesture(startX, startY, endX, endY)
             }
 
-            RemoteAction.TOGGLE_SOFT_KEYBOARD -> toggleSoftKeyboard()
             RemoteAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
             RemoteAction.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
             RemoteAction.RECENTS -> performGlobalAction(GLOBAL_ACTION_RECENTS)
@@ -144,18 +143,6 @@ class RemoteAccessibilityService : AccessibilityService() {
         builder.addStroke(GestureDescription.StrokeDescription(holdPath, 0, holdDuration))
         builder.addStroke(GestureDescription.StrokeDescription(dragPath, holdDuration, dragDuration))
         return dispatchGesture(builder.build(), null, null)
-    }
-
-    fun toggleSoftKeyboard(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            return false
-        }
-        val nextMode = if (isSoftKeyboardHidden()) SHOW_MODE_AUTO else SHOW_MODE_HIDDEN
-        val success = softKeyboardController.setShowMode(nextMode)
-        if (success) {
-            softKeyboardStateListener?.invoke(nextMode == SHOW_MODE_HIDDEN)
-        }
-        return success
     }
 
     fun isSoftKeyboardHidden(): Boolean {

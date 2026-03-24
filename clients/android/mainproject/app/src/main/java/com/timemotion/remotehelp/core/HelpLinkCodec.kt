@@ -9,6 +9,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 data class HelpInvitePayload(
+    val sessionId: String,
     val requestId: String,
     val helperName: String,
     val elderName: String,
@@ -28,8 +29,10 @@ object HelpLinkCodec {
         elderPhone: String,
         now: Long = System.currentTimeMillis()
     ): Pair<HelpInvitePayload, String> {
+        val sessionId = "sess-${UUID.randomUUID().toString().take(8)}"
         val payload = HelpInvitePayload(
-            requestId = "req-${UUID.randomUUID().toString().take(8)}",
+            sessionId = sessionId,
+            requestId = sessionId,
             helperName = helperName.trim().ifBlank { "协助方" },
             elderName = elderName.trim().ifBlank { "协助对象" },
             elderPhone = elderPhone.trim(),
@@ -39,11 +42,19 @@ object HelpLinkCodec {
         return payload to encode(payload)
     }
 
-    fun buildDeepLink(token: String): String =
-        "https://help.yourdomain.com/r/$token"
+    fun buildDeepLink(token: String, sessionId: String? = null): String =
+        buildString {
+            append("https://help.yourdomain.com/r/")
+            append(token)
+            if (!sessionId.isNullOrBlank()) {
+                append("?sessionId=")
+                append(Uri.encode(sessionId))
+            }
+        }
 
     fun encode(payload: HelpInvitePayload): String {
         val json = JSONObject()
+            .put("sessionId", payload.sessionId)
             .put("requestId", payload.requestId)
             .put("helperName", payload.helperName)
             .put("elderName", payload.elderName)
@@ -66,8 +77,10 @@ object HelpLinkCodec {
         require(sign(payloadPart) == signaturePart) { "签名校验失败" }
         val jsonBytes = Base64.decode(payloadPart, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val json = JSONObject(String(jsonBytes, StandardCharsets.UTF_8))
+        val sessionId = json.optString("sessionId").ifBlank { json.getString("requestId") }
         val payload = HelpInvitePayload(
-            requestId = json.getString("requestId"),
+            sessionId = sessionId,
+            requestId = json.optString("requestId").ifBlank { sessionId },
             helperName = json.optString("helperName"),
             elderName = json.optString("elderName"),
             elderPhone = json.optString("elderPhone"),

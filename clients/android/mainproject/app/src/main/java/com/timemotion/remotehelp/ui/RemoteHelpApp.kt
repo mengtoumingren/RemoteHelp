@@ -63,6 +63,13 @@ import com.timemotion.remotehelp.core.RecentContact
 import com.timemotion.remotehelp.core.SessionHistoryItem
 import com.timemotion.remotehelp.core.formatDateTime
 import com.timemotion.remotehelp.core.formatRemaining
+import com.timemotion.remotehelp.core.shouldBroadcastVerificationRequested
+import com.timemotion.remotehelp.core.shouldJoinHiddenVerificationRoom
+import com.timemotion.remotehelp.core.shouldJoinVisibleVerificationRoom
+import com.timemotion.remotehelp.core.shouldPrepareVerificationMedia
+import com.timemotion.remotehelp.core.shouldShowAssistPermissionPrompt
+import com.timemotion.remotehelp.core.shouldShowVerificationRequestDialog
+import com.timemotion.remotehelp.core.shouldListenForAssistExit
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.ui.remote.RemoteAssistScreen
@@ -129,8 +136,7 @@ fun RemoteHelpApp(
         uiState.activeSession?.requestId,
         uiState.activeSession?.stage
     ) {
-        val shouldPrepareVideo = uiState.currentScreen == AppScreen.VERIFICATION
-        if (shouldPrepareVideo && !mediaPermissionsGranted) {
+        if (uiState.shouldPrepareVerificationMedia() && !mediaPermissionsGranted) {
             permissionLauncher.launch(
                 arrayOf(
                     Manifest.permission.CAMERA,
@@ -149,17 +155,56 @@ fun RemoteHelpApp(
         callState.isInRoom,
         callState.isConnecting
     ) {
-        val shouldJoinHiddenVerification = (
-            uiState.side == DeviceSide.HELPER &&
-                uiState.activeSession?.stage == HelpStage.REQUEST_CREATED
-            )
-        val shouldJoinVisibleVerification = uiState.currentScreen == AppScreen.VERIFICATION
-        if (shouldJoinHiddenVerification && !callState.isInRoom && !callState.isConnecting) {
+        if (uiState.shouldJoinHiddenVerificationRoom() && !callState.isInRoom && !callState.isConnecting) {
             coordinator.callController.joinRoom(prepareLocalMedia = false)
-        } else if (shouldJoinVisibleVerification && mediaPermissionsGranted) {
-            coordinator.callController.startLocalMedia()
-            if (!callState.isInRoom && !callState.isConnecting) {
-                coordinator.callController.joinRoom()
+        } else if (uiState.shouldJoinVisibleVerificationRoom()) {
+            if (uiState.side == DeviceSide.HELPER) {
+                if (mediaPermissionsGranted) {
+                    coordinator.callController.startLocalMedia()
+                    if (!callState.isInRoom && !callState.isConnecting) {
+                        coordinator.callController.joinRoom()
+                    }
+                }
+            } else {
+                if (mediaPermissionsGranted) {
+                    coordinator.callController.startLocalMedia()
+                }
+                if (!callState.isInRoom && !callState.isConnecting) {
+                    coordinator.callController.joinRoom(prepareLocalMedia = false)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(
+        uiState.side,
+        uiState.currentScreen,
+        uiState.pendingInviteSession?.requestId,
+        uiState.activeSession?.requestId,
+        uiState.activeSession?.stage,
+        callState.isInRoom,
+        callState.roomParticipantCount
+    ) {
+        if (
+            uiState.side == DeviceSide.HELPER &&
+            uiState.activeSession?.stage == HelpStage.REQUEST_CREATED &&
+            callState.isInRoom &&
+            callState.roomParticipantCount > 1
+        ) {
+            coordinator.cancelHelperWaitTimeout()
+        }
+        if (
+            uiState.side == DeviceSide.ELDER &&
+            callState.isInRoom &&
+            callState.roomParticipantCount <= 1
+        ) {
+            if (uiState.pendingInviteSession != null) {
+                coordinator.expirePendingInvite("链接已过期，请重新发起协助")
+            } else if (
+                uiState.currentScreen == AppScreen.VERIFICATION &&
+                uiState.activeSession?.stage == HelpStage.VERIFYING
+            ) {
+                coordinator.failVerificationDueToRemoteTimeout()
             }
         }
     }
@@ -186,23 +231,14 @@ fun RemoteHelpApp(
         uiState.currentScreen,
         uiState.activeSession?.requestId,
         uiState.activeSession?.stage,
-        callState.isInRoom,
-        callState.remoteRenderer
+        callState.isInRoom
     ) {
-        val shouldNotifyVerificationRequest =
-            uiState.side == DeviceSide.ELDER &&
-                uiState.currentScreen == AppScreen.VERIFICATION &&
-                uiState.activeSession?.stage == HelpStage.VERIFYING &&
-                callState.isInRoom
-        if (!shouldNotifyVerificationRequest) {
+        if (!uiState.shouldBroadcastVerificationRequested() || !callState.isInRoom) {
             return@LaunchedEffect
         }
         while (
-            latestUiState.side == DeviceSide.ELDER &&
-                latestUiState.currentScreen == AppScreen.VERIFICATION &&
-                latestUiState.activeSession?.stage == HelpStage.VERIFYING &&
-                latestCallState.isInRoom &&
-                latestCallState.remoteRenderer == null
+            latestUiState.shouldBroadcastVerificationRequested() &&
+                latestCallState.isInRoom
         ) {
             coordinator.notifyVerificationRequested()
             delay(2000L)
@@ -216,16 +252,13 @@ fun RemoteHelpApp(
         remoteState.peers,
         remoteState.isConnected
     ) {
-        val sessionId = uiState.activeSession?.requestId
-        if (
-            uiState.side != DeviceSide.ELDER ||
-            uiState.currentScreen != AppScreen.ASSIST ||
-            sessionId == null
-        ) {
+        if (!uiState.shouldListenForAssistExit()) {
             elderControllerSeenSessionId = null
             elderControllerExitHandledSessionId = null
             return@LaunchedEffect
         }
+        val sessionId = uiState.activeSession?.requestId
+            ?: return@LaunchedEffect
         val hasControllerPeer = remoteState.peers.any { it.role == RemoteRole.CONTROLLER }
         if (hasControllerPeer) {
             elderControllerSeenSessionId = sessionId
@@ -246,7 +279,8 @@ fun RemoteHelpApp(
     if (
         uiState.side == DeviceSide.HELPER &&
         uiState.isVerificationRequestVisible &&
-        uiState.activeSession != null
+        uiState.activeSession != null &&
+        uiState.shouldShowVerificationRequestDialog()
     ) {
         VerificationRequestDialog(
             session = uiState.activeSession,
@@ -335,8 +369,7 @@ fun RemoteHelpApp(
             val assistSessionId = uiState.activeSession?.requestId
             val requestAssistPermissions: () -> Unit = {
                 if (
-                    uiState.currentScreen == AppScreen.ASSIST &&
-                    uiState.side == DeviceSide.ELDER &&
+                    uiState.shouldShowAssistPermissionPrompt(remoteState) &&
                     assistSessionId != null
                 ) {
                     assistPermissionPromptVisible = false
@@ -362,8 +395,7 @@ fun RemoteHelpApp(
                 remoteState.targetStatus.accessibilityEnabled
             ) {
                 if (
-                    uiState.currentScreen != AppScreen.ASSIST ||
-                    uiState.side != DeviceSide.ELDER ||
+                    !uiState.shouldShowAssistPermissionPrompt(remoteState) ||
                     assistSessionId == null
                 ) {
                     assistPermissionPromptVisible = false
@@ -432,8 +464,7 @@ fun RemoteHelpApp(
                 onFrameDrag = coordinator.remoteController::sendDragCommand,
                 onSendBack = coordinator.remoteController::sendBackCommand,
                 onSendHome = coordinator.remoteController::sendHomeCommand,
-                onSendRecents = coordinator.remoteController::sendRecentsCommand,
-                onToggleSoftKeyboard = coordinator.remoteController::sendToggleSoftKeyboardCommand
+                onSendRecents = coordinator.remoteController::sendRecentsCommand
             )
         }
     }
@@ -565,8 +596,21 @@ private fun TopHero(
                     )
                     Text(text = uiState.side.subtitle, color = Color(0xFF526277))
                 }
-                OutlinedButton(onClick = coordinator::openSettings) {
-                    Text("设置")
+                OutlinedButton(
+                    onClick = coordinator::openSettings,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF183153)
+                    )
+                ) {
+                    Text(
+                        text = "设置",
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip,
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -692,8 +736,21 @@ private fun SessionScreen(
                         )
                         Text("返回将结束这次会话", color = Color(0xFF526277))
                     }
-                    OutlinedButton(onClick = onBackClick) {
-                        Text("返回")
+                    OutlinedButton(
+                        onClick = onBackClick,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFF183153)
+                        )
+                    ) {
+                        Text(
+                            text = "返回",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Clip,
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
                 }
             }

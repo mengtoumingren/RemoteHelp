@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
@@ -75,11 +76,11 @@ fun VerificationScreen(
     onContinueAssist: () -> Unit,
     onBackClick: () -> Unit
 ) {
-    var acceptCooldownRemaining by remember(side, uiState.remoteRenderer) { mutableStateOf(15) }
+    var acceptCooldownRemaining by remember(side, stage, uiState.remoteRenderer) { mutableStateOf(15) }
     var remoteVideoTimeoutRemaining by remember(side, stage, uiState.remoteRenderer) { mutableStateOf(5 * 60) }
     var showRemoteVideoTimeoutDialog by remember(side, uiState.remoteRenderer, stage) { mutableStateOf(false) }
-    LaunchedEffect(side, uiState.remoteRenderer) {
-        if (side != DeviceSide.ELDER || uiState.remoteRenderer == null) {
+    LaunchedEffect(side, stage, uiState.remoteRenderer) {
+        if (side != DeviceSide.ELDER || stage != HelpStage.VERIFYING || uiState.remoteRenderer == null) {
             acceptCooldownRemaining = 15
             return@LaunchedEffect
         }
@@ -141,8 +142,20 @@ fun VerificationScreen(
                         Text(stage.description, color = Color(0xFF526277))
                     }
                     if (side == DeviceSide.ELDER) {
-                        OutlinedButton(onClick = onBackClick, shape = RoundedCornerShape(12.dp)) {
-                            Text("返回")
+                        OutlinedButton(
+                            onClick = onBackClick,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color(0xFF183153)
+                            )
+                        ) {
+                            Text(
+                                text = "返回",
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Clip
+                            )
                         }
                     }
                 }
@@ -158,7 +171,7 @@ fun VerificationScreen(
                         RendererPanel(
                             renderer = uiState.remoteRenderer,
                             placeholder = if (side == DeviceSide.ELDER) {
-                                "等待协助方画面接入（${remoteVideoTimeoutRemaining}s 后超时退出）"
+                                "等待协助方确认接入（${remoteVideoTimeoutRemaining}s 后超时退出）"
                             } else {
                                 "等待对方画面接入"
                             },
@@ -220,9 +233,9 @@ fun VerificationScreen(
                     if (side == DeviceSide.ELDER) {
                         Text(
                             text = if (uiState.remoteRenderer == null) {
-                                "请等待对方视频画面接入，接入后才可开始身份确认。"
+                                "已发送视频认证请求，等待协助方确认接入。"
                             } else if (acceptCooldownRemaining > 0) {
-                                "请至少观察并确认对方 15 秒，剩余 ${acceptCooldownRemaining}s 后才能接受协助。"
+                                "请先观察对方画面，剩余 ${acceptCooldownRemaining}s 后才能接受协助。"
                             } else {
                                 "请确认对方身份和沟通内容无异常后，再决定是否接受协助。"
                             },

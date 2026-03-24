@@ -1,5 +1,6 @@
 package com.timemotion.remotehelp.webrtc
 
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -34,6 +35,10 @@ class SignalClient(
     private val okHttpClient: OkHttpClient,
     private val onEvent: (SignalEvent) -> Unit
 ) {
+    companion object {
+        private const val TAG = "SignalClient"
+    }
+
     private var webSocket: WebSocket? = null
     private var roomId: String = ""
     private var displayName: String = ""
@@ -57,8 +62,11 @@ class SignalClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.d(TAG, "ws <= $text")
                 val json = JSONObject(text)
-                when (json.getString("type")) {
+                val type = json.getString("type")
+                Log.d(TAG, "ws <= type=$type roomId=$roomId sessionId=$sessionId")
+                when (type) {
                     "joined" -> onEvent(
                         SignalEvent.Joined(
                             clientId = json.getString("clientId"),

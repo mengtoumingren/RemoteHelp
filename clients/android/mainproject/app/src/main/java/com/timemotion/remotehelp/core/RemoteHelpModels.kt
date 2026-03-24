@@ -8,7 +8,7 @@ enum class DeviceSide(val title: String, val subtitle: String) {
 enum class HelpStage(val title: String, val description: String) {
     DRAFT("待发起", "填写手机号后生成本次协助请求"),
     REQUEST_CREATED("待验证", "短信链接已生成，等待进入视频验证"),
-    VERIFYING("视频核验中", "双方建立音视频通话，确认身份"),
+    VERIFYING("视频核验中", "等待协助方确认后建立音视频通话"),
     VERIFIED("已通过验证", "可以进入远程协助阶段"),
     ASSISTING("协助中", "屏幕共享和远程控制进行中"),
     REJECTED("已拒绝", "对方拒绝了本次协助"),
@@ -52,7 +52,8 @@ data class ActiveHelpSession(
     val verificationAcceptedAt: Long? = null,
     val endReason: String? = null
 ) {
-    val sessionRoomId: String = requestId
+    val sessionId: String = requestId
+    val sessionRoomId: String = sessionId
     val verificationRoomId: String = sessionRoomId
     val remoteRoomId: String = sessionRoomId
 

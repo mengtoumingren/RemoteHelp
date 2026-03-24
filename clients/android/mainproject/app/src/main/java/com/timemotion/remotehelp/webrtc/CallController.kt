@@ -42,6 +42,7 @@ data class CallUiState(
     val isCameraEnabled: Boolean = true,
     val isSpeakerOn: Boolean = true,
     val remotePeerName: String = "",
+    val roomParticipantCount: Int = 0,
     val localRenderer: VideoRendererBinding? = null,
     val remoteRenderer: VideoRendererBinding? = null
 )
@@ -83,6 +84,9 @@ class CallController(
     private var remoteClientId: String? = null
     private var isMakingOffer = false
     private var isLocalCaptureStarted = false
+    private var areLocalTracksAttached = false
+    private var shouldInitiateOffer = true
+    private var isRtcOfferAllowed = false
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -111,9 +115,25 @@ class CallController(
         _uiState.value = _uiState.value.copy(displayName = value)
     }
 
+    fun setOfferInitiator(value: Boolean) {
+        shouldInitiateOffer = value
+    }
+
+    fun setRtcOfferAllowed(value: Boolean) {
+        isRtcOfferAllowed = value
+        if (value) {
+            requestRtcNegotiationIfReady()
+        }
+    }
+
     fun startLocalMedia() {
         if (localVideoTrack != null && localAudioTrack != null) {
+            if (!isLocalCaptureStarted) {
+                resumeAfterForeground()
+            }
+            attachLocalTracksToPeerConnection()
             configureAudioRoute()
+            requestRtcNegotiationIfReady()
             return
         }
         val capturer = createVideoCapturer()
@@ -134,9 +154,11 @@ class CallController(
         localAudioTrack = localAudioSource?.let {
             peerConnectionFactory.createAudioTrack("local-audio", it)
         }
+        attachLocalTracksToPeerConnection()
         configureAudioRoute()
         publishRendererBindings()
         setStatus("本地媒体已准备")
+        requestRtcNegotiationIfReady()
     }
 
     fun joinRoom(prepareLocalMedia: Boolean = true) {
@@ -164,9 +186,11 @@ class CallController(
         _uiState.value = _uiState.value.copy(
             isConnecting = false,
             isInRoom = false,
+            roomParticipantCount = 0,
             remotePeerName = "",
             status = "已挂断"
         )
+        isRtcOfferAllowed = false
         publishRendererBindings()
     }
 
@@ -272,7 +296,11 @@ class CallController(
                 override fun onAddStream(stream: MediaStream) = Unit
                 override fun onRemoveStream(stream: MediaStream) = Unit
                 override fun onDataChannel(dataChannel: org.webrtc.DataChannel) = Unit
-                override fun onRenegotiationNeeded() = Unit
+                override fun onRenegotiationNeeded() {
+                    if (canInitiateOffer()) {
+                        makeOffer()
+                    }
+                }
 
                 override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
                     val track = receiver.track() as? VideoTrack ?: return
@@ -282,14 +310,15 @@ class CallController(
             }
         ) ?: error("Failed to create PeerConnection")
 
-        localVideoTrack?.let { connection.addTrack(it) }
-        localAudioTrack?.let { connection.addTrack(it) }
         peerConnection = connection
+        if (localVideoTrack != null || localAudioTrack != null) {
+            attachLocalTracksToPeerConnection(connection)
+        }
         return connection
     }
 
     private fun makeOffer() {
-        if (remoteClientId == null || isMakingOffer) {
+        if (!canInitiateOffer() || remoteClientId == null || isMakingOffer) {
             return
         }
         isMakingOffer = true
@@ -400,6 +429,7 @@ class CallController(
         remoteVideoTrack = null
         pendingRemoteIce.clear()
         isMakingOffer = false
+        areLocalTracksAttached = false
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
@@ -429,6 +459,22 @@ class CallController(
         remoteClientId = null
         _uiState.value = _uiState.value.copy(remotePeerName = "")
         publishRendererBindings()
+    }
+
+    private fun canInitiateOffer(): Boolean =
+        shouldInitiateOffer &&
+            isRtcOfferAllowed &&
+            remoteClientId != null &&
+            !isMakingOffer &&
+            hasLocalMediaTracks()
+
+    private fun hasLocalMediaTracks(): Boolean =
+        localVideoTrack != null || localAudioTrack != null
+
+    fun requestRtcNegotiationIfReady() {
+        if (canInitiateOffer()) {
+            makeOffer()
+        }
     }
 
     private fun publishRendererBindings() {
@@ -461,6 +507,23 @@ class CallController(
         _uiState.value = _uiState.value.copy(localRenderer = localBinding, remoteRenderer = remoteBinding)
     }
 
+    private fun attachLocalTracksToPeerConnection(connection: PeerConnection? = peerConnection) {
+        val targetConnection = connection ?: return
+        if (areLocalTracksAttached) {
+            return
+        }
+        var attached = false
+        localVideoTrack?.let {
+            targetConnection.addTrack(it)
+            attached = true
+        }
+        localAudioTrack?.let {
+            targetConnection.addTrack(it)
+            attached = true
+        }
+        areLocalTracksAttached = attached
+    }
+
     private fun onSignalEvent(event: SignalEvent) {
         mainHandler.post {
             when (event) {
@@ -470,6 +533,7 @@ class CallController(
                     _uiState.value = _uiState.value.copy(
                         isConnecting = false,
                         isInRoom = true,
+                        roomParticipantCount = event.participants.size,
                         remotePeerName = if (hasExistingPeer) {
                             _uiState.value.remotePeerName.ifBlank { "对端" }
                         } else {
@@ -481,14 +545,22 @@ class CallController(
 
                 is SignalEvent.PeerJoined -> {
                     remoteClientId = event.clientId
-                    _uiState.value = _uiState.value.copy(remotePeerName = event.displayName)
+                    _uiState.value = _uiState.value.copy(
+                        remotePeerName = event.displayName,
+                        roomParticipantCount = (_uiState.value.roomParticipantCount + 1).coerceAtLeast(1)
+                    )
                     setStatus("对端已加入，准备协商")
-                    makeOffer()
+                    if (canInitiateOffer()) {
+                        makeOffer()
+                    }
                 }
 
                 is SignalEvent.PeerLeft -> {
                     setStatus("对端已离开房间")
                     clearRemotePeerState()
+                    _uiState.value = _uiState.value.copy(
+                        roomParticipantCount = (_uiState.value.roomParticipantCount - 1).coerceAtLeast(1)
+                    )
                     clearPeerConnection()
                 }
 
@@ -513,6 +585,7 @@ class CallController(
                     _uiState.value = _uiState.value.copy(
                         isConnecting = false,
                         isInRoom = false,
+                        roomParticipantCount = 0,
                         remotePeerName = ""
                     )
                     setStatus("信令连接已断开")
