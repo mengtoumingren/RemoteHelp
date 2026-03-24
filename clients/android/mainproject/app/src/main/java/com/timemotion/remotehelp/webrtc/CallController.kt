@@ -15,13 +15,13 @@ import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.Camera2Enumerator
 import org.webrtc.CameraVideoCapturer
-import org.webrtc.DefaultVideoDecoderFactory
-import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
+import org.webrtc.HardwareVideoDecoderFactory
+import org.webrtc.HardwareVideoEncoderFactory
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RendererCommon
 import org.webrtc.RtpReceiver
@@ -70,8 +70,12 @@ class CallController(
         private const val LOCAL_CAPTURE_WIDTH = 1280
         private const val LOCAL_CAPTURE_HEIGHT = 720
         private const val LOCAL_CAPTURE_FPS = 30
+        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 600_000
+        private const val SCREEN_SHARE_MAX_FPS = 6
         private const val LOCAL_CAMERA_TRACK_ID = "verification-video"
         private const val LOCAL_SCREEN_TRACK_ID = "screen-share-video"
+        private const val EXTRA_SCREEN_CAPTURE_WIDTH = "remotehelp.extra.screen_capture_width"
+        private const val EXTRA_SCREEN_CAPTURE_HEIGHT = "remotehelp.extra.screen_capture_height"
         private const val MAX_RTC_RECONNECT_ATTEMPTS = 4
         private const val BASE_RTC_RECONNECT_DELAY_MS = 1000L
         private const val MAX_RTC_RECONNECT_DELAY_MS = 10_000L
@@ -122,8 +126,8 @@ class CallController(
                 .createInitializationOptions()
         )
         peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
+            .setVideoEncoderFactory(HardwareVideoEncoderFactory(eglBase.eglBaseContext, true, true))
+            .setVideoDecoderFactory(HardwareVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
         publishRendererBindings()
     }
@@ -214,7 +218,7 @@ class CallController(
         rtcReconnectAttempt = 0
         signalClient.leave()
         disposeLocalCameraResources()
-        stopScreenShareCapture()
+        stopScreenShareCaptureInternal(restoreLocalCamera = false)
         disposeScreenShareResources()
         disposeCameraCaptureResources()
         localAudioSource?.dispose()
@@ -261,44 +265,55 @@ class CallController(
         if (screenCapturer != null) {
             screenVideoTrack?.setEnabled(true)
             screenVideoSender?.setTrack(screenVideoTrack, false)
+            configureScreenShareSender()
             return true
         }
         return runCatching {
             AppLog.d("CallController", "开始屏幕共享采集, screenSender=${screenVideoSender != null}, peer=${peerConnection != null}")
+            stopLocalCapture()
+            localVideoTrack?.setEnabled(false)
             val helper = SurfaceTextureHelper.create("ScreenShareCaptureThread", eglBase.eglBaseContext)
             val source = screenVideoSource ?: error("屏幕视频源未初始化")
             val metrics = context.readDeviceScreenMetrics()
-            val captureWidth = metrics.width.coerceAtLeast(1)
-            val captureHeight = metrics.height.coerceAtLeast(1)
+            val captureWidth = data.getIntExtra(EXTRA_SCREEN_CAPTURE_WIDTH, metrics.width)
+                .coerceAtLeast(1)
+                .ensureEven()
+            val captureHeight = data.getIntExtra(EXTRA_SCREEN_CAPTURE_HEIGHT, metrics.height)
+                .coerceAtLeast(1)
+                .ensureEven()
             val capturer = ScreenCapturerAndroid(
                 data,
                 object : MediaProjection.Callback() {
                     override fun onStop() {
                         mainHandler.post {
-                            stopScreenShareCaptureInternal()
+                            stopScreenShareCaptureInternal(restoreLocalCamera = true)
                         }
                     }
                 }
             )
             capturer.initialize(helper, context, source.capturerObserver)
-            capturer.startCapture(captureWidth, captureHeight, LOCAL_CAPTURE_FPS)
+            capturer.startCapture(captureWidth, captureHeight, SCREEN_SHARE_MAX_FPS)
             screenSurfaceTextureHelper = helper
             screenCapturer = capturer
             track.setEnabled(true)
             screenVideoSender?.setTrack(track, false)
+            configureScreenShareSender()
             attachLocalTracksToPeerConnection()
             AppLog.d("CallController", "屏幕共享采集已启动, sender=${screenVideoSender != null}, track=${track.id()}")
             setStatus("屏幕共享已启动")
             true
         }.getOrElse {
             AppLog.logThrowable("CallController", it, "启动屏幕共享失败")
+            if (_uiState.value.isCameraEnabled) {
+                resumeAfterForeground()
+            }
             setStatus("启动屏幕共享失败: ${it.message ?: "unknown"}")
             false
         }
     }
 
     fun stopScreenShareCapture() {
-        stopScreenShareCaptureInternal()
+        stopScreenShareCaptureInternal(restoreLocalCamera = true)
         screenVideoTrack?.setEnabled(false)
     }
 
@@ -651,7 +666,7 @@ class CallController(
         surfaceTextureHelper = null
     }
 
-    private fun stopScreenShareCaptureInternal() {
+    private fun stopScreenShareCaptureInternal(restoreLocalCamera: Boolean) {
         val capturer = screenCapturer ?: return
         screenCapturer = null
         runCatching { capturer.stopCapture() }
@@ -659,10 +674,13 @@ class CallController(
         screenSurfaceTextureHelper?.dispose()
         screenSurfaceTextureHelper = null
         screenVideoTrack?.setEnabled(false)
+        if (restoreLocalCamera && _uiState.value.isCameraEnabled) {
+            resumeAfterForeground()
+        }
     }
 
     private fun disposeScreenShareResources() {
-        stopScreenShareCaptureInternal()
+        stopScreenShareCaptureInternal(restoreLocalCamera = false)
         screenVideoSender?.setTrack(null, false)
         screenVideoSender = null
         screenVideoTrack?.dispose()
@@ -763,15 +781,51 @@ class CallController(
         val targetConnection = connection ?: return
         if (localVideoTrack != null && localVideoSender == null) {
             localVideoSender = targetConnection.addTrack(localVideoTrack)
+            configureLocalVideoSender()
         }
         if (localAudioTrack != null && localAudioSender == null) {
             localAudioSender = targetConnection.addTrack(localAudioTrack)
         }
         if (screenVideoTrack != null && screenVideoSender == null) {
             screenVideoSender = targetConnection.addTrack(screenVideoTrack)
+            configureScreenShareSender()
         }
         areLocalTracksAttached =
             localVideoSender != null || localAudioSender != null || screenVideoSender != null
+    }
+
+    private fun configureLocalVideoSender() {
+        val sender = localVideoSender ?: return
+        val parameters = sender.parameters
+        val encodings = parameters.encodings
+        if (encodings.isEmpty()) {
+            return
+        }
+        encodings.forEach { encoding ->
+            encoding.maxBitrateBps = 2_000_000
+            encoding.minBitrateBps = null
+            encoding.maxFramerate = LOCAL_CAPTURE_FPS
+            encoding.scaleResolutionDownBy = 1.0
+        }
+        runCatching { sender.parameters = parameters }
+            .onFailure { AppLog.logThrowable("CallController", it, "应用本地视频编码参数失败") }
+    }
+
+    private fun configureScreenShareSender() {
+        val sender = screenVideoSender ?: return
+        val parameters = sender.parameters
+        val encodings = parameters.encodings
+        if (encodings.isEmpty()) {
+            return
+        }
+        encodings.forEach { encoding ->
+            encoding.maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS
+            encoding.minBitrateBps = null
+            encoding.maxFramerate = SCREEN_SHARE_MAX_FPS
+            encoding.scaleResolutionDownBy = 1.0
+        }
+        runCatching { sender.parameters = parameters }
+            .onFailure { AppLog.logThrowable("CallController", it, "应用屏幕共享编码参数失败") }
     }
 
     private fun onSignalEvent(event: SignalEvent) {
@@ -877,3 +931,5 @@ private open class SimpleSdpObserver : SdpObserver {
     override fun onCreateFailure(error: String) = Unit
     override fun onSetFailure(error: String) = Unit
 }
+
+private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1

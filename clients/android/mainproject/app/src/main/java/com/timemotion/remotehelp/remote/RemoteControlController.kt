@@ -9,10 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
-import org.webrtc.DefaultVideoDecoderFactory
-import org.webrtc.DefaultVideoEncoderFactory
-import org.webrtc.EglBase
-import org.webrtc.PeerConnectionFactory
 import kotlin.math.roundToInt
 
 class RemoteControlController(
@@ -21,21 +17,20 @@ class RemoteControlController(
     companion object {
         private const val SCREEN_SHARE_MIN_WIDTH = 360
         private const val SCREEN_SHARE_MIN_HEIGHT = 640
-        private const val SCREEN_SHARE_MAX_LONG_SIDE = 2560
-        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 3_000_000
-        private const val SCREEN_SHARE_MAX_FPS = 12
+        private const val SCREEN_SHARE_MAX_LONG_SIDE = 960
+        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 600_000
+        private const val SCREEN_SHARE_MAX_FPS = 6
         private const val TARGET_STATUS_STARTING = "屏幕采集权限已授权，正在启动屏幕流"
         private const val TARGET_STATUS_READY_WITH_ACCESSIBILITY = "屏幕流已启动，可接受远程协助"
         private const val TARGET_STATUS_READY_NEED_ACCESSIBILITY = "屏幕流已启动，请开启无障碍服务"
+        private const val EXTRA_SCREEN_CAPTURE_WIDTH = "remotehelp.extra.screen_capture_width"
+        private const val EXTRA_SCREEN_CAPTURE_HEIGHT = "remotehelp.extra.screen_capture_height"
     }
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val eglBase = EglBase.create()
     private val okHttpClient = okhttp3.OkHttpClient.Builder().build()
     private val signalClient = RemoteSignalClient(okHttpClient, ::onSignalEvent)
-
-    private val peerConnectionFactory: PeerConnectionFactory
 
     var onScreenShareStartRequested: ((Intent) -> Boolean)? = null
     var onScreenShareStopRequested: (() -> Unit)? = null
@@ -47,15 +42,6 @@ class RemoteControlController(
     val uiState: StateFlow<RemoteControlUiState> = _uiState.asStateFlow()
 
     init {
-        PeerConnectionFactory.initialize(
-            PeerConnectionFactory.InitializationOptions.builder(appContext)
-                .createInitializationOptions()
-        )
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
-            .createPeerConnectionFactory()
-
         RemoteAccessibilityService.stateListener = { enabled ->
             mainHandler.post { onAccessibilityAvailabilityChanged(enabled) }
         }
@@ -150,6 +136,8 @@ class RemoteControlController(
         pushStatus("已授权屏幕采集，正在启动屏幕流")
         pendingScreenCaptureData = data
         pendingScreenCaptureProfile = captureProfile
+        data.putExtra(EXTRA_SCREEN_CAPTURE_WIDTH, captureProfile.captureWidth)
+        data.putExtra(EXTRA_SCREEN_CAPTURE_HEIGHT, captureProfile.captureHeight)
         ScreenCaptureForegroundService.start(appContext, currentNotificationText())
         if (isForegroundServiceActive) {
             mainHandler.post { startPendingScreenCapture() }
@@ -268,8 +256,6 @@ class RemoteControlController(
         RemoteAccessibilityService.softKeyboardStateListener = null
         ScreenCaptureForegroundService.statusListener = null
         ScreenCaptureForegroundService.messageListener = null
-        peerConnectionFactory.dispose()
-        eglBase.release()
         okHttpClient.dispatcher.executorService.shutdown()
     }
 
