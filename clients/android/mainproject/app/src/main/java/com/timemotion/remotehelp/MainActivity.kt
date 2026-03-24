@@ -15,6 +15,10 @@ import com.timemotion.remotehelp.ui.RemoteHelpApp
 import com.timemotion.remotehelp.ui.theme.RemotehelpTheme
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        private var retainedCoordinator: RemoteHelpCoordinator? = null
+    }
+
     private lateinit var coordinator: RemoteHelpCoordinator
     private lateinit var projectionManager: MediaProjectionManager
     private val pendingDeepLink = mutableStateOf<String?>(null)
@@ -22,7 +26,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog.install(applicationContext)
-        coordinator = RemoteHelpCoordinator(applicationContext)
+        coordinator = retainedCoordinator ?: RemoteHelpCoordinator(applicationContext).also {
+            retainedCoordinator = it
+        }
         projectionManager = getSystemService(MediaProjectionManager::class.java)
         queueDeepLink(intent)
         enableEdgeToEdge()
@@ -63,7 +69,12 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        coordinator.release()
+        if (isFinishing) {
+            coordinator.release()
+            retainedCoordinator = null
+        } else {
+            AppLog.i("MainActivity", "activity destroyed but session retained")
+        }
         super.onDestroy()
     }
 

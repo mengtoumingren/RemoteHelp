@@ -3,6 +3,7 @@ package com.timemotion.remotehelp.core
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.remote.RemoteControlController
 import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.webrtc.CallController
@@ -538,6 +539,23 @@ class RemoteHelpCoordinator(
     private fun finishSession(reason: String, clearInviteEntry: Boolean = false) {
         cancelHelperWaitTimeout()
         val session = _uiState.value.activeSession
+        if (
+            session != null &&
+            _uiState.value.side == DeviceSide.HELPER &&
+            _uiState.value.currentScreen == AppScreen.ASSIST
+        ) {
+            runCatching {
+                callController.sendAppSignal(
+                    SIGNAL_ASSIST_ENDED,
+                    JSONObject()
+                        .put("requestId", session.requestId)
+                        .put("reason", reason),
+                    broadcast = true
+                )
+            }.onFailure {
+                AppLog.logThrowable("RemoteHelpCoordinator", it, "广播协助结束失败")
+            }
+        }
         callController.leaveRoom()
         remoteController.disconnect()
         if (session != null) {
@@ -658,6 +676,15 @@ class RemoteHelpCoordinator(
                     finishSession("${fromDisplayName.ifBlank { "对端" }} 拒绝了协助")
                 }
 
+                SIGNAL_ASSIST_ENDED -> {
+                    val requestId = payload.optString("requestId")
+                    if (requestId == session.requestId && _uiState.value.side == DeviceSide.ELDER) {
+                        finishSession(payload.optString("reason").ifBlank {
+                            "协助方已退出远程协助"
+                        })
+                    }
+                }
+
                 SIGNAL_VERIFICATION_LEFT -> {
                     val requestId = payload.optString("requestId")
                     if (requestId == session.requestId) {
@@ -693,6 +720,7 @@ class RemoteHelpCoordinator(
         private const val HELPER_WAIT_TIMEOUT_MS = 90_000L
         private const val SIGNAL_HELP_ACCEPT = "help_accept"
         private const val SIGNAL_HELP_REJECT = "help_reject"
+        private const val SIGNAL_ASSIST_ENDED = "assist_ended"
         private const val SIGNAL_VERIFICATION_LEFT = "verification_left"
         private const val SIGNAL_VERIFICATION_REQUESTED = "verification_requested"
         private const val SIGNAL_VERIFICATION_ACCEPTED = "verification_accepted"
