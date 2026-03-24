@@ -81,6 +81,7 @@ class CallController(
     private var localAudioSource: AudioSource? = null
     private var localAudioTrack: AudioTrack? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private var remoteAudioTrack: AudioTrack? = null
     private var remoteClientId: String? = null
     private var isMakingOffer = false
     private var isLocalCaptureStarted = false
@@ -212,7 +213,13 @@ class CallController(
     }
 
     fun toggleSpeakerOutput() {
-        _uiState.value = _uiState.value.copy(isSpeakerOn = !_uiState.value.isSpeakerOn)
+        setSpeakerOutputEnabled(!_uiState.value.isSpeakerOn)
+    }
+
+    fun setSpeakerOutputEnabled(enabled: Boolean) {
+        if (_uiState.value.isSpeakerOn != enabled) {
+            _uiState.value = _uiState.value.copy(isSpeakerOn = enabled)
+        }
         if (localAudioTrack != null || _uiState.value.isInRoom || _uiState.value.isConnecting) {
             configureAudioRoute()
         }
@@ -303,9 +310,18 @@ class CallController(
                 }
 
                 override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
-                    val track = receiver.track() as? VideoTrack ?: return
-                    remoteVideoTrack = track
-                    publishRendererBindings()
+                    when (val track = receiver.track()) {
+                        is VideoTrack -> {
+                            remoteVideoTrack = track
+                            publishRendererBindings()
+                            setStatus("已接入对方画面")
+                        }
+                        is AudioTrack -> {
+                            remoteAudioTrack = track
+                            configureAudioRoute()
+                            setStatus("已接入对方声音")
+                        }
+                    }
                 }
             }
         ) ?: error("Failed to create PeerConnection")
@@ -427,6 +443,7 @@ class CallController(
 
     private fun clearPeerConnection() {
         remoteVideoTrack = null
+        remoteAudioTrack = null
         pendingRemoteIce.clear()
         isMakingOffer = false
         areLocalTracksAttached = false
@@ -456,6 +473,7 @@ class CallController(
 
     private fun clearRemotePeerState() {
         remoteVideoTrack = null
+        remoteAudioTrack = null
         remoteClientId = null
         _uiState.value = _uiState.value.copy(remotePeerName = "")
         publishRendererBindings()

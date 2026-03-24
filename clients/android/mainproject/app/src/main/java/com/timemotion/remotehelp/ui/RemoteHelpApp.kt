@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -38,6 +39,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,12 +48,14 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.timemotion.remotehelp.R
 import com.timemotion.remotehelp.core.ActiveHelpSession
 import com.timemotion.remotehelp.core.AppScreen
@@ -75,7 +79,10 @@ import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.ui.remote.RemoteAssistScreen
 import com.timemotion.remotehelp.ui.verification.VerificationScreen
 import com.timemotion.remotehelp.webrtc.CallUiState
+import com.timemotion.remotehelp.webrtc.VideoRendererBinding
 import kotlinx.coroutines.delay
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 
 @Composable
 fun RemoteHelpApp(
@@ -295,6 +302,13 @@ fun RemoteHelpApp(
             onConfirm = coordinator::confirmPendingInvite
         )
     }
+    if (
+        uiState.side == DeviceSide.HELPER &&
+        uiState.currentScreen == AppScreen.ASSIST &&
+        uiState.activeSession != null
+    ) {
+        KeepAliveVerificationCallHost(callState = callState)
+    }
 
     when (uiState.currentScreen) {
         AppScreen.DASHBOARD -> DashboardScreen(uiState, coordinator)
@@ -459,6 +473,8 @@ fun RemoteHelpApp(
                     context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 },
                 onConnectClick = coordinator.remoteController::connect,
+                isSpeakerOn = callState.isSpeakerOn,
+                onToggleSpeaker = coordinator.callController::toggleSpeakerOutput,
                 onFrameTap = coordinator.remoteController::sendTapCommand,
                 onFrameSwipe = coordinator.remoteController::sendSwipeCommand,
                 onFrameDrag = coordinator.remoteController::sendDragCommand,
@@ -468,6 +484,48 @@ fun RemoteHelpApp(
             )
         }
     }
+}
+
+@Composable
+private fun KeepAliveVerificationCallHost(callState: CallUiState) {
+    if (callState.localRenderer == null && callState.remoteRenderer == null) {
+        return
+    }
+    Box(
+        modifier = Modifier
+            .size(1.dp)
+            .alpha(0f)
+    ) {
+        callState.remoteRenderer?.let { binding ->
+            KeepAliveRenderer(binding = binding)
+        }
+        callState.localRenderer?.let { binding ->
+            KeepAliveRenderer(binding = binding)
+        }
+    }
+}
+
+@Composable
+private fun KeepAliveRenderer(binding: VideoRendererBinding) {
+    val context = LocalContext.current
+    val surfaceView = remember(binding) {
+        SurfaceViewRenderer(context).apply {
+            init(binding.eglBaseContext, null)
+            setEnableHardwareScaler(true)
+            setMirror(binding.mirror)
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        }
+    }
+
+    DisposableEffect(binding) {
+        binding.attach(surfaceView)
+        onDispose { binding.detach(surfaceView) }
+    }
+
+    AndroidView(
+        factory = { surfaceView },
+        modifier = Modifier.fillMaxSize()
+    )
 }
 
 @Composable

@@ -456,6 +456,7 @@ class RemoteHelpCoordinator(
         }
         if (_uiState.value.side == DeviceSide.HELPER) {
             store.clearPendingHelperSession()
+            callController.setSpeakerOutputEnabled(false)
         }
         configureRemoteController(session)
         _uiState.value = _uiState.value.copy(

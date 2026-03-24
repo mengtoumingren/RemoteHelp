@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,6 +68,8 @@ fun RemoteAssistScreen(
     onRequestCapture: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onConnectClick: () -> Unit,
+    isSpeakerOn: Boolean,
+    onToggleSpeaker: () -> Unit,
     onFrameTap: (Float, Float) -> Unit,
     onFrameSwipe: (Float, Float, Float, Float) -> Unit,
     onFrameDrag: (Float, Float, Float, Float) -> Unit,
@@ -98,6 +101,8 @@ fun RemoteAssistScreen(
                             isMoreMenuVisible = isMoreMenuVisible,
                             onOpenMore = { isMoreMenuVisible = true },
                             onDismissMore = { isMoreMenuVisible = false },
+                            isSpeakerOn = isSpeakerOn,
+                            onToggleSpeaker = onToggleSpeaker,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -241,6 +246,8 @@ private fun HelperAssistBottomBar(
     isMoreMenuVisible: Boolean,
     onOpenMore: () -> Unit,
     onDismissMore: () -> Unit,
+    isSpeakerOn: Boolean,
+    onToggleSpeaker: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -271,7 +278,9 @@ private fun HelperAssistBottomBar(
                 onClick = onSendRecents,
                 modifier = Modifier.width(itemWidth)
             )
-            Box {
+            Box(
+                modifier = Modifier.wrapContentSize(Alignment.TopEnd)
+            ) {
                 OutlinedButton(
                     onClick = onOpenMore,
                     modifier = Modifier.width(itemWidth),
@@ -288,6 +297,13 @@ private fun HelperAssistBottomBar(
                     expanded = isMoreMenuVisible,
                     onDismissRequest = onDismissMore
                 ) {
+                    DropdownMenuItem(
+                        text = { Text(if (isSpeakerOn) "关闭外放" else "开启外放") },
+                        onClick = {
+                            onDismissMore()
+                            onToggleSpeaker()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("结束协助") },
                         onClick = {
