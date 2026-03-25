@@ -156,60 +156,70 @@ class CallController(
     }
 
     fun startLocalMedia() {
-        ensureScreenShareTrack()
-        if (localVideoTrack != null && localAudioTrack != null) {
-            if (!isLocalCaptureStarted) {
-                resumeAfterForeground()
+        runCatching {
+            ensureScreenShareTrack()
+            if (localVideoTrack != null && localAudioTrack != null) {
+                if (!isLocalCaptureStarted) {
+                    resumeAfterForeground()
+                }
+                attachLocalTracksToPeerConnection()
+                configureAudioRoute()
+                requestRtcNegotiationIfReady()
+                return@runCatching
             }
+            val capturer = createVideoCapturer()
+            if (capturer == null) {
+                setStatus("未找到可用摄像头")
+                return@runCatching
+            }
+            val helper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+            val source = peerConnectionFactory.createVideoSource(false)
+            capturer.initialize(helper, context, source.capturerObserver)
+            capturer.startCapture(LOCAL_CAPTURE_WIDTH, LOCAL_CAPTURE_HEIGHT, LOCAL_CAPTURE_FPS)
+            isLocalCaptureStarted = true
+            surfaceTextureHelper = helper
+            videoCapturer = capturer
+            videoSource = source
+            localVideoTrack = peerConnectionFactory.createVideoTrack(LOCAL_CAMERA_TRACK_ID, source)
+            localAudioSource = peerConnectionFactory.createAudioSource(MediaConstraints())
+            localAudioTrack = localAudioSource?.let {
+                peerConnectionFactory.createAudioTrack("local-audio", it)
+            }
+            ensureScreenShareTrack()
             attachLocalTracksToPeerConnection()
             configureAudioRoute()
+            publishRendererBindings()
+            setStatus("本地媒体已准备")
             requestRtcNegotiationIfReady()
-            return
+        }.onFailure {
+            AppLog.logThrowable("CallController", it, "启动本地媒体失败")
+            setStatus("启动本地媒体失败: ${it.message ?: "unknown"}")
         }
-        val capturer = createVideoCapturer()
-        if (capturer == null) {
-            setStatus("未找到可用摄像头")
-            return
-        }
-        val helper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
-        val source = peerConnectionFactory.createVideoSource(false)
-        capturer.initialize(helper, context, source.capturerObserver)
-        capturer.startCapture(LOCAL_CAPTURE_WIDTH, LOCAL_CAPTURE_HEIGHT, LOCAL_CAPTURE_FPS)
-        isLocalCaptureStarted = true
-        surfaceTextureHelper = helper
-        videoCapturer = capturer
-        videoSource = source
-        localVideoTrack = peerConnectionFactory.createVideoTrack(LOCAL_CAMERA_TRACK_ID, source)
-        localAudioSource = peerConnectionFactory.createAudioSource(MediaConstraints())
-        localAudioTrack = localAudioSource?.let {
-            peerConnectionFactory.createAudioTrack("local-audio", it)
-        }
-        ensureScreenShareTrack()
-        attachLocalTracksToPeerConnection()
-        configureAudioRoute()
-        publishRendererBindings()
-        setStatus("本地媒体已准备")
-        requestRtcNegotiationIfReady()
     }
 
     fun joinRoom(prepareLocalMedia: Boolean = true) {
-        if (_uiState.value.serverUrl.isBlank() || _uiState.value.roomId.isBlank()) {
-            setStatus("请填写服务地址和房间号")
-            return
+        runCatching {
+            if (_uiState.value.serverUrl.isBlank() || _uiState.value.roomId.isBlank()) {
+                setStatus("请填写服务地址和房间号")
+                return@runCatching
+            }
+            allowRtcReconnect = true
+            cancelRtcReconnect()
+            rtcReconnectAttempt = 0
+            if (prepareLocalMedia) {
+                startLocalMedia()
+            }
+            remoteClientId = null
+            _uiState.value = _uiState.value.copy(isConnecting = true, status = "连接信令服务中")
+            signalClient.connect(
+                url = _uiState.value.serverUrl.trim(),
+                roomId = _uiState.value.roomId.trim(),
+                displayName = _uiState.value.displayName.trim().ifBlank { "AndroidUser" }
+            )
+        }.onFailure {
+            AppLog.logThrowable("CallController", it, "加入房间失败")
+            setStatus("加入房间失败: ${it.message ?: "unknown"}")
         }
-        allowRtcReconnect = true
-        cancelRtcReconnect()
-        rtcReconnectAttempt = 0
-        if (prepareLocalMedia) {
-            startLocalMedia()
-        }
-        remoteClientId = null
-        _uiState.value = _uiState.value.copy(isConnecting = true, status = "连接信令服务中")
-        signalClient.connect(
-            url = _uiState.value.serverUrl.trim(),
-            roomId = _uiState.value.roomId.trim(),
-            displayName = _uiState.value.displayName.trim().ifBlank { "AndroidUser" }
-        )
     }
 
     fun leaveRoom() {
@@ -319,14 +329,19 @@ class CallController(
 
     private fun ensureScreenShareTrack(): VideoTrack? {
         screenVideoTrack?.let { return it }
-        val source = peerConnectionFactory.createVideoSource(true)
-        val track = peerConnectionFactory.createVideoTrack(LOCAL_SCREEN_TRACK_ID, source)
-        track.setEnabled(false)
-        screenVideoSource = source
-        screenVideoTrack = track
-        AppLog.d("CallController", "创建屏幕视频轨, track=${track.id()}")
-        attachLocalTracksToPeerConnection()
-        return track
+        return runCatching {
+            val source = peerConnectionFactory.createVideoSource(true)
+            val track = peerConnectionFactory.createVideoTrack(LOCAL_SCREEN_TRACK_ID, source)
+            track.setEnabled(false)
+            screenVideoSource = source
+            screenVideoTrack = track
+            AppLog.d("CallController", "创建屏幕视频轨, track=${track.id()}")
+            attachLocalTracksToPeerConnection()
+            track
+        }.getOrElse {
+            AppLog.logThrowable("CallController", it, "创建屏幕共享轨失败")
+            null
+        }
     }
 
     fun setSpeakerOutputEnabled(enabled: Boolean) {
@@ -373,11 +388,12 @@ class CallController(
             isLocalCaptureStarted = true
             setStatus("已恢复本地视频采集")
         }.onFailure { error ->
+            AppLog.logThrowable("CallController", error, "恢复本地视频失败")
             setStatus("恢复本地视频失败: ${error.message ?: "unknown"}")
         }
     }
 
-    private fun createPeerConnectionIfNeeded(): PeerConnection {
+    private fun createPeerConnectionIfNeeded(): PeerConnection? {
         peerConnection?.let { return it }
         val rtcConfig = PeerConnection.RTCConfiguration(
             listOf(PeerConnection.IceServer.builder("stun:stun.timemotion.top:3478").createIceServer())
@@ -385,84 +401,92 @@ class CallController(
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
-        val connection = peerConnectionFactory.createPeerConnection(
-            rtcConfig,
-            object : PeerConnection.Observer {
-                override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+        val connection = runCatching {
+            peerConnectionFactory.createPeerConnection(
+                rtcConfig,
+                object : PeerConnection.Observer {
+                    override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
 
-                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                    if (state == PeerConnection.IceConnectionState.CONNECTED ||
-                        state == PeerConnection.IceConnectionState.COMPLETED
-                    ) {
-                        cancelRtcReconnect()
+                    override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                        if (state == PeerConnection.IceConnectionState.CONNECTED ||
+                            state == PeerConnection.IceConnectionState.COMPLETED
+                        ) {
+                            cancelRtcReconnect()
+                        }
+                        if (state == PeerConnection.IceConnectionState.FAILED ||
+                            state == PeerConnection.IceConnectionState.CLOSED
+                        ) {
+                            handleRtcConnectionLost("ICE: $state")
+                        }
+                        setStatus("ICE: $state")
                     }
-                    if (state == PeerConnection.IceConnectionState.FAILED ||
-                        state == PeerConnection.IceConnectionState.CLOSED
-                    ) {
-                        handleRtcConnectionLost("ICE: $state")
+
+                    override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+
+                    override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
+
+                    override fun onIceCandidate(candidate: IceCandidate) {
+                        signalClient.sendSignal(
+                            type = "candidate",
+                            targetClientId = remoteClientId,
+                            payload = JSONObject()
+                                .put("sdpMid", candidate.sdpMid)
+                                .put("sdpMLineIndex", candidate.sdpMLineIndex)
+                                .put("candidate", candidate.sdp)
+                        )
                     }
-                    setStatus("ICE: $state")
-                }
 
-                override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-
-                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
-
-                override fun onIceCandidate(candidate: IceCandidate) {
-                    signalClient.sendSignal(
-                        type = "candidate",
-                        targetClientId = remoteClientId,
-                        payload = JSONObject()
-                            .put("sdpMid", candidate.sdpMid)
-                            .put("sdpMLineIndex", candidate.sdpMLineIndex)
-                            .put("candidate", candidate.sdp)
-                    )
-                }
-
-                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
-                override fun onAddStream(stream: MediaStream) = Unit
-                override fun onRemoveStream(stream: MediaStream) = Unit
-                override fun onDataChannel(dataChannel: org.webrtc.DataChannel) = Unit
-                override fun onRenegotiationNeeded() {
-                    if (canInitiateOffer()) {
-                        makeOffer()
+                    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
+                    override fun onAddStream(stream: MediaStream) = Unit
+                    override fun onRemoveStream(stream: MediaStream) = Unit
+                    override fun onDataChannel(dataChannel: org.webrtc.DataChannel) = Unit
+                    override fun onRenegotiationNeeded() {
+                        if (canInitiateOffer()) {
+                            makeOffer()
+                        }
                     }
-                }
 
-                override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
-                    when (val track = receiver.track()) {
-                        is VideoTrack -> {
-                            val enabled = runCatching { track.enabled() }.getOrDefault(true)
-                            AppLog.d("CallController", "收到远端视频轨 id=${track.id()}, enabled=$enabled")
-                            val isScreenTrack = track.id() == LOCAL_SCREEN_TRACK_ID || !enabled
-                            val isCameraTrack = track.id() == LOCAL_CAMERA_TRACK_ID || enabled
-                            if (isScreenTrack && remoteScreenTrack == null) {
-                                remoteScreenTrack = track
-                            } else if (isCameraTrack && remoteVideoTrack == null) {
-                                remoteVideoTrack = track
-                            } else if (remoteVideoTrack == null) {
-                                remoteVideoTrack = track
-                            } else {
-                                remoteScreenTrack = track
-                            }
-                            publishRendererBindings()
-                            setStatus(
-                                if (track.id() == LOCAL_SCREEN_TRACK_ID) {
-                                    "已接入对方屏幕画面"
+                    override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
+                        when (val track = receiver.track()) {
+                            is VideoTrack -> {
+                                val enabled = runCatching { track.enabled() }.getOrDefault(true)
+                                AppLog.d("CallController", "收到远端视频轨 id=${track.id()}, enabled=$enabled")
+                                val isScreenTrack = track.id() == LOCAL_SCREEN_TRACK_ID || !enabled
+                                val isCameraTrack = track.id() == LOCAL_CAMERA_TRACK_ID || enabled
+                                if (isScreenTrack && remoteScreenTrack == null) {
+                                    remoteScreenTrack = track
+                                } else if (isCameraTrack && remoteVideoTrack == null) {
+                                    remoteVideoTrack = track
+                                } else if (remoteVideoTrack == null) {
+                                    remoteVideoTrack = track
                                 } else {
-                                    "已接入对方画面"
+                                    remoteScreenTrack = track
                                 }
-                            )
-                        }
-                        is AudioTrack -> {
-                            remoteAudioTrack = track
-                            configureAudioRoute()
-                            setStatus("已接入对方声音")
+                                publishRendererBindings()
+                                setStatus(
+                                    if (track.id() == LOCAL_SCREEN_TRACK_ID) {
+                                        "已接入对方屏幕画面"
+                                    } else {
+                                        "已接入对方画面"
+                                    }
+                                )
+                            }
+                            is AudioTrack -> {
+                                remoteAudioTrack = track
+                                configureAudioRoute()
+                                setStatus("已接入对方声音")
+                            }
                         }
                     }
                 }
-            }
-        ) ?: error("Failed to create PeerConnection")
+            )
+        }.getOrElse {
+            AppLog.logThrowable("CallController", it, "创建 PeerConnection 失败")
+            null
+        } ?: run {
+            setStatus("创建 PeerConnection 失败")
+            return null
+        }
 
         peerConnection = connection
         if (localVideoTrack != null || localAudioTrack != null) {
@@ -476,7 +500,10 @@ class CallController(
             return
         }
         isMakingOffer = true
-        val connection = createPeerConnectionIfNeeded()
+        val connection = createPeerConnectionIfNeeded() ?: run {
+            isMakingOffer = false
+            return
+        }
         connection.createOffer(object : SimpleSdpObserver() {
             override fun onCreateSuccess(description: SessionDescription) {
                 connection.setLocalDescription(object : SimpleSdpObserver() {
@@ -506,7 +533,7 @@ class CallController(
 
     private fun handleOffer(fromClientId: String, payload: JSONObject) {
         remoteClientId = fromClientId
-        val connection = createPeerConnectionIfNeeded()
+        val connection = createPeerConnectionIfNeeded() ?: return
         val offer = SessionDescription(SessionDescription.Type.OFFER, payload.getString("sdp"))
         connection.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
@@ -632,7 +659,7 @@ class CallController(
             }
             requestRtcNegotiationIfReady()
         }
-        mainHandler.postDelayed(rtcReconnectRunnable!!, delayMs)
+        rtcReconnectRunnable?.let { mainHandler.postDelayed(it, delayMs) }
     }
 
     private fun cancelRtcReconnect() {

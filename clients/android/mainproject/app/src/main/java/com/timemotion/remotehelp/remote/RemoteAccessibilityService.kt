@@ -15,6 +15,7 @@ import android.text.TextUtils
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.timemotion.remotehelp.core.AppLog
 
 class RemoteAccessibilityService : AccessibilityService() {
     private val softKeyboardListener = AccessibilityService.SoftKeyboardController.OnShowModeChangedListener { _, showMode ->
@@ -27,14 +28,18 @@ class RemoteAccessibilityService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
-        super.onServiceConnected()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            softKeyboardController.addOnShowModeChangedListener(softKeyboardListener)
+        runCatching {
+            super.onServiceConnected()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                softKeyboardController.addOnShowModeChangedListener(softKeyboardListener)
+            }
+            Log.i(TAG, "onServiceConnected")
+            instance = this
+            stateListener?.invoke(true)
+            softKeyboardStateListener?.invoke(isSoftKeyboardHidden())
+        }.onFailure {
+            AppLog.logThrowable(TAG, it, "无障碍服务连接失败")
         }
-        Log.i(TAG, "onServiceConnected")
-        instance = this
-        stateListener?.invoke(true)
-        softKeyboardStateListener?.invoke(isSoftKeyboardHidden())
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
@@ -44,89 +49,103 @@ class RemoteAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
-        Log.w(TAG, "onUnbind")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            softKeyboardController.removeOnShowModeChangedListener(softKeyboardListener)
+        return runCatching {
+            Log.w(TAG, "onUnbind")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                softKeyboardController.removeOnShowModeChangedListener(softKeyboardListener)
+            }
+            instance = null
+            stateListener?.invoke(false)
+            super.onUnbind(intent)
+        }.getOrElse {
+            AppLog.logThrowable(TAG, it, "无障碍服务解绑失败")
+            false
         }
-        instance = null
-        stateListener?.invoke(false)
-        return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        Log.w(TAG, "onDestroy")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            softKeyboardController.removeOnShowModeChangedListener(softKeyboardListener)
+        runCatching {
+            Log.w(TAG, "onDestroy")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                softKeyboardController.removeOnShowModeChangedListener(softKeyboardListener)
+            }
+            instance = null
+            stateListener?.invoke(false)
+            super.onDestroy()
+        }.onFailure {
+            AppLog.logThrowable(TAG, it, "无障碍服务销毁失败")
         }
-        instance = null
-        stateListener?.invoke(false)
-        super.onDestroy()
     }
 
     fun execute(command: RemoteCommand): Boolean {
-        return when (command.action) {
-            RemoteAction.TAP -> {
-                val metrics = applicationContext.readDeviceScreenMetrics()
-                val x = (command.screenX?.toFloat()
-                    ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                    .coerceIn(0f, metrics.width.toFloat())
-                val y = (command.screenY?.toFloat()
-                    ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                    .coerceIn(0f, metrics.height.toFloat())
-                activateEditableNodeAt(x.toInt(), y.toInt()) || dispatchTapGesture(x, y)
-            }
-
-            RemoteAction.SWIPE -> {
-                val metrics = applicationContext.readDeviceScreenMetrics()
-                val startX = (command.screenX?.toFloat()
-                    ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                    .coerceIn(0f, metrics.width.toFloat())
-                val startY = (command.screenY?.toFloat()
-                    ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                    .coerceIn(0f, metrics.height.toFloat())
-                val endX = (command.endScreenX?.toFloat()
-                    ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                    .coerceIn(0f, metrics.width.toFloat())
-                val endY = (command.endScreenY?.toFloat()
-                    ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                    .coerceIn(0f, metrics.height.toFloat())
-                dispatchSwipeGesture(startX, startY, endX, endY)
-            }
-
-            RemoteAction.DRAG -> {
-                val metrics = applicationContext.readDeviceScreenMetrics()
-                val startX = (command.screenX?.toFloat()
-                    ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                    .coerceIn(0f, metrics.width.toFloat())
-                val startY = (command.screenY?.toFloat()
-                    ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                    .coerceIn(0f, metrics.height.toFloat())
-                val endX = (command.endScreenX?.toFloat()
-                    ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                    .coerceIn(0f, metrics.width.toFloat())
-                val endY = (command.endScreenY?.toFloat()
-                    ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                    .coerceIn(0f, metrics.height.toFloat())
-                dispatchLongPressDragGesture(startX, startY, endX, endY)
-            }
-
-            RemoteAction.TEXT_INPUT -> {
-                val text = command.text.orEmpty()
-                if (text.isEmpty()) {
-                    false
-                } else {
-                    pasteTextIntoFocusedNode(text)
+        return runCatching {
+            when (command.action) {
+                RemoteAction.TAP -> {
+                    val metrics = applicationContext.readDeviceScreenMetrics()
+                    val x = (command.screenX?.toFloat()
+                        ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                        .coerceIn(0f, metrics.width.toFloat())
+                    val y = (command.screenY?.toFloat()
+                        ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                        .coerceIn(0f, metrics.height.toFloat())
+                    activateEditableNodeAt(x.toInt(), y.toInt()) || dispatchTapGesture(x, y)
                 }
+
+                RemoteAction.SWIPE -> {
+                    val metrics = applicationContext.readDeviceScreenMetrics()
+                    val startX = (command.screenX?.toFloat()
+                        ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                        .coerceIn(0f, metrics.width.toFloat())
+                    val startY = (command.screenY?.toFloat()
+                        ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                        .coerceIn(0f, metrics.height.toFloat())
+                    val endX = (command.endScreenX?.toFloat()
+                        ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                        .coerceIn(0f, metrics.width.toFloat())
+                    val endY = (command.endScreenY?.toFloat()
+                        ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                        .coerceIn(0f, metrics.height.toFloat())
+                    dispatchSwipeGesture(startX, startY, endX, endY)
+                }
+
+                RemoteAction.DRAG -> {
+                    val metrics = applicationContext.readDeviceScreenMetrics()
+                    val startX = (command.screenX?.toFloat()
+                        ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                        .coerceIn(0f, metrics.width.toFloat())
+                    val startY = (command.screenY?.toFloat()
+                        ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                        .coerceIn(0f, metrics.height.toFloat())
+                    val endX = (command.endScreenX?.toFloat()
+                        ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
+                        .coerceIn(0f, metrics.width.toFloat())
+                    val endY = (command.endScreenY?.toFloat()
+                        ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
+                        .coerceIn(0f, metrics.height.toFloat())
+                    dispatchLongPressDragGesture(startX, startY, endX, endY)
+                }
+
+                RemoteAction.TEXT_INPUT -> {
+                    val text = command.text.orEmpty()
+                    if (text.isEmpty()) {
+                        false
+                    } else {
+                        pasteTextIntoFocusedNode(text)
+                    }
+                }
+
+                RemoteAction.BACKSPACE -> deletePreviousCharacter()
+                RemoteAction.CURSOR_LEFT -> moveCursorByCharacter(previous = true)
+                RemoteAction.CURSOR_RIGHT -> moveCursorByCharacter(previous = false)
+                RemoteAction.ENTER -> insertNewLine()
+
+                RemoteAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                RemoteAction.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
+                RemoteAction.RECENTS -> performGlobalAction(GLOBAL_ACTION_RECENTS)
             }
-
-            RemoteAction.BACKSPACE -> deletePreviousCharacter()
-            RemoteAction.CURSOR_LEFT -> moveCursorByCharacter(previous = true)
-            RemoteAction.CURSOR_RIGHT -> moveCursorByCharacter(previous = false)
-            RemoteAction.ENTER -> insertNewLine()
-
-            RemoteAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
-            RemoteAction.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
-            RemoteAction.RECENTS -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+        }.getOrElse {
+            AppLog.logThrowable(TAG, it, "执行远控指令失败: ${command.action}")
+            false
         }
     }
 

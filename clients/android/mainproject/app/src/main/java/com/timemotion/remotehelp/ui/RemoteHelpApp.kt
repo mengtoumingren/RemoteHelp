@@ -58,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.R
 import com.timemotion.remotehelp.core.ActiveHelpSession
 import com.timemotion.remotehelp.core.AppScreen
@@ -119,17 +120,27 @@ fun RemoteHelpApp(
         joinAfterPermission = false
     }
     val projectionLauncher = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            coordinator.remoteController.startTargetCapture(result.resultCode, result.data!!)
-            if (
-                openAccessibilitySettingsAfterCaptureSessionId != null &&
-                !remoteState.targetStatus.accessibilityEnabled
-            ) {
+        runCatching {
+            val data = result.data
+            if (result.resultCode == Activity.RESULT_OK && data != null) {
+                coordinator.remoteController.startTargetCapture(result.resultCode, data)
+                if (
+                    openAccessibilitySettingsAfterCaptureSessionId != null &&
+                    !remoteState.targetStatus.accessibilityEnabled
+                ) {
+                    openAccessibilitySettingsAfterCaptureSessionId = null
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }.onFailure {
+                        AppLog.logThrowable("RemoteHelpApp", it, "打开无障碍设置失败")
+                    }
+                }
+            } else {
+                coordinator.remoteController.onCapturePermissionDenied()
                 openAccessibilitySettingsAfterCaptureSessionId = null
-                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
-        } else {
-            coordinator.remoteController.onCapturePermissionDenied()
+        }.onFailure {
+            AppLog.logThrowable("RemoteHelpApp", it, "处理屏幕共享授权结果失败")
             openAccessibilitySettingsAfterCaptureSessionId = null
         }
     }
@@ -197,13 +208,17 @@ fun RemoteHelpApp(
         uiState.activeSession?.requestId,
         uiState.activeSession?.expiresAt
     ) {
-        val session = uiState.activeSession ?: return@LaunchedEffect
-        if (
-            uiState.side == DeviceSide.HELPER &&
-            uiState.currentScreen == AppScreen.SESSION &&
-            session.isExpired()
-        ) {
-            coordinator.endCurrentSession("短信链接已过期，请重新发起协助")
+        runCatching {
+            val session = uiState.activeSession ?: return@runCatching
+            if (
+                uiState.side == DeviceSide.HELPER &&
+                uiState.currentScreen == AppScreen.SESSION &&
+                session.isExpired()
+            ) {
+                coordinator.endCurrentSession("短信链接已过期，请重新发起协助")
+            }
+        }.onFailure {
+            AppLog.logThrowable("RemoteHelpApp", it, "检查会话过期失败")
         }
     }
 
@@ -216,27 +231,34 @@ fun RemoteHelpApp(
         callState.isInRoom,
         callState.roomParticipantCount
     ) {
-        if (
-            uiState.side == DeviceSide.HELPER &&
-            uiState.activeSession?.stage == HelpStage.REQUEST_CREATED &&
-            callState.isInRoom &&
-            callState.roomParticipantCount > 1
-        ) {
-            coordinator.cancelHelperWaitTimeout()
-        }
-        if (
-            uiState.side == DeviceSide.ELDER &&
-            callState.isInRoom &&
-            callState.roomParticipantCount <= 1
-        ) {
-            if (uiState.pendingInviteSession != null) {
-                coordinator.expirePendingInvite("链接已过期，请重新发起协助")
-            } else if (
-                uiState.currentScreen == AppScreen.VERIFICATION &&
-                uiState.activeSession?.stage == HelpStage.VERIFYING
+        runCatching {
+            if (
+                uiState.side == DeviceSide.HELPER &&
+                uiState.activeSession?.stage == HelpStage.REQUEST_CREATED &&
+                callState.isInRoom &&
+                callState.roomParticipantCount > 1
             ) {
-                coordinator.failVerificationDueToRemoteTimeout()
+                runCatching { coordinator.cancelHelperWaitTimeout() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "取消等待超时失败") }
             }
+            if (
+                uiState.side == DeviceSide.ELDER &&
+                callState.isInRoom &&
+                callState.roomParticipantCount <= 1
+            ) {
+                if (uiState.pendingInviteSession != null) {
+                    runCatching { coordinator.expirePendingInvite("链接已过期，请重新发起协助") }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "处理邀请过期失败") }
+                } else if (
+                    uiState.currentScreen == AppScreen.VERIFICATION &&
+                    uiState.activeSession?.stage == HelpStage.VERIFYING
+                ) {
+                    runCatching { coordinator.failVerificationDueToRemoteTimeout() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "处理远程超时失败") }
+                }
+            }
+        }.onFailure {
+            AppLog.logThrowable("RemoteHelpApp", it, "检查房间成员失败")
         }
     }
 
@@ -253,7 +275,11 @@ fun RemoteHelpApp(
             remoteState.targetStatus.captureActive &&
             !notificationPermissionGranted
         ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            runCatching {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }.onFailure {
+                AppLog.logThrowable("RemoteHelpApp", it, "申请通知权限失败")
+            }
         }
     }
 
@@ -271,7 +297,8 @@ fun RemoteHelpApp(
             latestUiState.shouldBroadcastVerificationRequested() &&
                 latestCallState.isInRoom
         ) {
-            coordinator.notifyVerificationRequested()
+            runCatching { coordinator.notifyVerificationRequested() }
+                .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "广播验证请求失败") }
             delay(2000L)
         }
     }
@@ -300,7 +327,8 @@ fun RemoteHelpApp(
             remoteState.isConnected
         ) {
             elderControllerExitHandledSessionId = sessionId
-            coordinator.onControllerLeftAssist()
+            runCatching { coordinator.onControllerLeftAssist() }
+                .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "处理协助方退出失败") }
         }
     }
 
@@ -315,15 +343,27 @@ fun RemoteHelpApp(
     ) {
         VerificationRequestDialog(
             session = uiState.activeSession,
-            onAccept = coordinator::acceptVerificationRequest,
-            onReject = coordinator::rejectVerificationRequest
+            onAccept = {
+                runCatching { coordinator.acceptVerificationRequest() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "接受验证请求失败") }
+            },
+            onReject = {
+                runCatching { coordinator.rejectVerificationRequest() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "拒绝验证请求失败") }
+            }
         )
     }
     uiState.pendingInviteSession?.let { session ->
         InvitePreviewDialog(
             session = session,
-            onDismiss = coordinator::dismissPendingInvite,
-            onConfirm = coordinator::confirmPendingInvite
+            onDismiss = {
+                runCatching { coordinator.dismissPendingInvite() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "关闭协助预览失败") }
+            },
+            onConfirm = {
+                runCatching { coordinator.confirmPendingInvite() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "确认协助预览失败") }
+            }
         )
     }
     if (
@@ -342,14 +382,25 @@ fun RemoteHelpApp(
             session = uiState.activeSession,
             bannerMessage = uiState.bannerMessage,
             onDismissBanner = coordinator::dismissBanner,
-            onBackClick = { coordinator.endCurrentSession("已取消本次请求") },
-            onExpired = { coordinator.endCurrentSession("短信链接已过期，请重新发起协助") },
+            onBackClick = {
+                runCatching { coordinator.endCurrentSession("已取消本次请求") }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "结束会话失败") }
+            },
+            onExpired = {
+                runCatching { coordinator.endCurrentSession("短信链接已过期，请重新发起协助") }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "处理会话过期失败") }
+            },
             onCopyLink = {
                 uiState.activeSession?.deepLink?.let { link ->
                     val clipboard = android.content.ClipboardManager::class.java
                     val clipboardManager = context.getSystemService(clipboard)
-                    clipboardManager?.setPrimaryClip(android.content.ClipData.newPlainText("remote_help_link", link))
-                    Toast.makeText(context, "短信链接已复制", Toast.LENGTH_SHORT).show()
+                    runCatching {
+                        clipboardManager?.setPrimaryClip(android.content.ClipData.newPlainText("remote_help_link", link))
+                        Toast.makeText(context, "短信链接已复制", Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+                        AppLog.logThrowable("RemoteHelpApp", it, "复制短信链接失败")
+                        Toast.makeText(context, "复制失败，已记录日志", Toast.LENGTH_SHORT).show()
+                    }
                 }
             },
             onSendSms = {
@@ -363,6 +414,7 @@ fun RemoteHelpApp(
                     )
                     runCatching { context.startActivity(smsIntent) }
                         .onFailure {
+                            AppLog.logThrowable("RemoteHelpApp", it, "发送短信失败")
                             Toast.makeText(context, "未找到可发送短信的应用", Toast.LENGTH_SHORT).show()
                         }
                 }
@@ -371,30 +423,61 @@ fun RemoteHelpApp(
 
         AppScreen.VERIFICATION -> VerificationScreen(
             side = uiState.side,
-            stage = uiState.activeSession?.stage ?: HelpStage.DRAFT,
-            helperName = uiState.activeSession?.helperName ?: uiState.helperName,
-            elderName = uiState.activeSession?.elderName ?: uiState.elderName,
-            uiState = callState,
-            onJoinClick = {
-                if (mediaPermissionsGranted) {
-                    coordinator.callController.startLocalMedia()
-                    coordinator.callController.joinRoom()
-                } else {
-                    joinAfterPermission = true
-                    permissionLauncher.launch(
-                        arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-                    )
-                }
+                stage = uiState.activeSession?.stage ?: HelpStage.DRAFT,
+                helperName = uiState.activeSession?.helperName ?: uiState.helperName,
+                elderName = uiState.activeSession?.elderName ?: uiState.elderName,
+                uiState = callState,
+                onJoinClick = {
+                    runCatching {
+                        if (mediaPermissionsGranted) {
+                            coordinator.callController.startLocalMedia()
+                            coordinator.callController.joinRoom()
+                        } else {
+                            joinAfterPermission = true
+                            permissionLauncher.launch(
+                                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+                            )
+                        }
+                    }.onFailure {
+                        AppLog.logThrowable("RemoteHelpApp", it, "加入验证房间失败")
+                    }
+                },
+            onLeaveClick = {
+                runCatching { coordinator.callController.leaveRoom() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "离开验证房间失败") }
             },
-            onLeaveClick = coordinator.callController::leaveRoom,
-            onToggleMic = coordinator.callController::toggleMic,
-            onToggleCamera = coordinator.callController::toggleCamera,
-            onToggleSpeaker = coordinator.callController::toggleSpeakerOutput,
-            onAcceptClick = coordinator::acceptVerification,
-            onRejectClick = coordinator::rejectVerification,
-            onRemoteVideoTimeoutConfirm = coordinator::failVerificationDueToRemoteTimeout,
-            onContinueAssist = coordinator::openAssist,
-            onBackClick = coordinator::leaveVerification
+            onToggleMic = {
+                runCatching { coordinator.callController.toggleMic() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "切换麦克风失败") }
+            },
+            onToggleCamera = {
+                runCatching { coordinator.callController.toggleCamera() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "切换摄像头失败") }
+            },
+            onToggleSpeaker = {
+                runCatching { coordinator.callController.toggleSpeakerOutput() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "切换扬声器失败") }
+            },
+            onAcceptClick = {
+                runCatching { coordinator.acceptVerification() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "接受验证失败") }
+            },
+            onRejectClick = {
+                runCatching { coordinator.rejectVerification() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "拒绝验证失败") }
+            },
+            onRemoteVideoTimeoutConfirm = {
+                runCatching { coordinator.failVerificationDueToRemoteTimeout() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "处理视频超时失败") }
+            },
+            onContinueAssist = {
+                runCatching { coordinator.openAssist() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "进入远程协助失败") }
+            },
+            onBackClick = {
+                runCatching { coordinator.leaveVerification() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "返回验证页失败") }
+            }
         )
 
         AppScreen.ASSIST -> {
@@ -417,9 +500,16 @@ fun RemoteHelpApp(
                     if (needsCapture) {
                         openAccessibilitySettingsAfterCaptureSessionId =
                             if (needsAccessibility) assistSessionId else null
-                        projectionLauncher.launch(projectionIntent)
+                        runCatching { projectionLauncher.launch(projectionIntent) }
+                            .onFailure {
+                                AppLog.logThrowable("RemoteHelpApp", it, "申请屏幕共享失败")
+                            }
                     } else if (needsAccessibility) {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }.onFailure {
+                            AppLog.logThrowable("RemoteHelpApp", it, "打开无障碍设置失败")
+                        }
                     }
                 } else {
                     assistPermissionPromptVisible = false
@@ -492,23 +582,66 @@ fun RemoteHelpApp(
                 elderName = uiState.activeSession?.elderName ?: uiState.elderName,
                 uiState = remoteState,
                 screenRenderer = if (remoteState.targetStatus.captureActive) callState.assistRenderer else null,
-                onEndClick = { coordinator.endCurrentSession() },
-                onRequestCapture = { projectionLauncher.launch(projectionIntent) },
-                onOpenAccessibilitySettings = {
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                onEndClick = {
+                    runCatching { coordinator.endCurrentSession() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "结束远程协助失败") }
                 },
-                onConnectClick = coordinator.remoteController::connect,
+                onRequestCapture = {
+                    runCatching { projectionLauncher.launch(projectionIntent) }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "请求屏幕共享失败") }
+                },
+                onOpenAccessibilitySettings = {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }.onFailure {
+                        AppLog.logThrowable("RemoteHelpApp", it, "打开无障碍设置失败")
+                    }
+                },
+                onConnectClick = {
+                    runCatching { coordinator.remoteController.connect() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "连接远控失败") }
+                },
                 isSpeakerOn = callState.isSpeakerOn,
-                onToggleSpeaker = coordinator.callController::toggleSpeakerOutput,
-                onSendText = coordinator.remoteController::sendTextCommand,
-                onSendBackspace = coordinator.remoteController::sendBackspaceCommand,
-                onSendEnter = coordinator.remoteController::sendEnterCommand,
-                onFrameTap = coordinator.remoteController::sendTapCommand,
-                onFrameSwipe = coordinator.remoteController::sendSwipeCommand,
-                onFrameDrag = coordinator.remoteController::sendDragCommand,
-                onSendBack = coordinator.remoteController::sendBackCommand,
-                onSendHome = coordinator.remoteController::sendHomeCommand,
-                onSendRecents = coordinator.remoteController::sendRecentsCommand
+                onToggleSpeaker = {
+                    runCatching { coordinator.callController.toggleSpeakerOutput() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "切换扬声器失败") }
+                },
+                onSendText = { text ->
+                    runCatching { coordinator.remoteController.sendTextCommand(text) }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送文本失败") }
+                },
+                onSendBackspace = {
+                    runCatching { coordinator.remoteController.sendBackspaceCommand() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送退格失败") }
+                },
+                onSendEnter = {
+                    runCatching { coordinator.remoteController.sendEnterCommand() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送回车失败") }
+                },
+                onFrameTap = { x, y ->
+                    runCatching { coordinator.remoteController.sendTapCommand(x, y) }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送点击失败") }
+                },
+                onFrameSwipe = { sx, sy, ex, ey ->
+                    runCatching { coordinator.remoteController.sendSwipeCommand(sx, sy, ex, ey) }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送滑动失败") }
+                },
+                onFrameDrag = { sx, sy, ex, ey ->
+                    runCatching { coordinator.remoteController.sendDragCommand(sx, sy, ex, ey) }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送拖拽失败") }
+                },
+                onSendBack = {
+                    runCatching { coordinator.remoteController.sendBackCommand() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送返回键失败") }
+                },
+                onSendHome = {
+                    runCatching { coordinator.remoteController.sendHomeCommand() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送主页键失败") }
+                },
+                onSendRecents = {
+                    runCatching { coordinator.remoteController.sendRecentsCommand() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发送最近任务失败") }
+                }
             )
         }
     }
@@ -537,12 +670,20 @@ private fun KeepAliveVerificationCallHost(callState: CallUiState) {
 private fun KeepAliveRenderer(binding: VideoRendererBinding) {
     val context = LocalContext.current
     val surfaceView = remember(binding) {
-        SurfaceViewRenderer(context).apply {
-            init(binding.eglBaseContext, null)
-            setEnableHardwareScaler(true)
-            setMirror(binding.mirror)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        runCatching {
+            SurfaceViewRenderer(context).apply {
+                init(binding.eglBaseContext, null)
+                setEnableHardwareScaler(true)
+                setMirror(binding.mirror)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            }
+        }.getOrElse {
+            AppLog.logThrowable("RemoteHelpApp", it, "创建视频渲染器失败")
+            null
         }
+    }
+    if (surfaceView == null) {
+        return
     }
 
     DisposableEffect(binding) {
@@ -731,7 +872,13 @@ private fun HelperHome(
                 label = { Text("联系人称呼") },
                 modifier = Modifier.fillMaxWidth()
             )
-            Button(onClick = coordinator::createRequest, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = {
+                    runCatching { coordinator.createRequest() }
+                        .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "发起协助失败") }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text("发起协助")
             }
             Text(text = "协助说明", fontWeight = FontWeight.Medium, color = Color(0xFF183153))
@@ -795,7 +942,10 @@ private fun ElderHome(
                     Text("粘贴链接")
                 }
                 Button(
-                    onClick = { coordinator.consumeInvite(uiState.inviteEntry) },
+                    onClick = {
+                        runCatching { coordinator.consumeInvite(uiState.inviteEntry) }
+                            .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "查看协助信息失败") }
+                    },
                     modifier = Modifier.widthIn(min = 168.dp)
                 ) {
                     Text("查看协助信息")
@@ -961,8 +1111,12 @@ private fun SettingsDialog(
     uiState: RemoteHelpUiState,
     coordinator: RemoteHelpCoordinator
 ) {
+    var showLogs by remember { mutableStateOf(false) }
     AlertDialog(
-        onDismissRequest = coordinator::closeSettings,
+        onDismissRequest = {
+            runCatching { coordinator.closeSettings() }
+                .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "关闭设置页失败") }
+        },
         title = { Text("连接设置") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -979,28 +1133,37 @@ private fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    text = "提示：`ws://192.168.2.109:3000/ws` 只适用于 Android 模拟器。真机联调请改成宿主机局域网 IP，例如 `ws://192.168.2.109:3000/ws`。",
+                    text = "提示：模拟器一般使用 `ws://10.0.2.2:3000/ws`，真机联调请改成宿主机局域网 IP，例如 `ws://192.168.2.109:3000/ws`。",
                     color = Color(0xFF526277)
                 )
                 OutlinedButton(
-                    onClick = coordinator::openLogsDirectory,
+                    onClick = { showLogs = true },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("查看日志目录")
+                    Text("查看日志")
                 }
             }
         },
         confirmButton = {
-            Button(onClick = coordinator::saveSettings) {
+            Button(onClick = {
+                runCatching { coordinator.saveSettings() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "保存设置失败") }
+            }) {
                 Text("保存")
             }
         },
         dismissButton = {
-            OutlinedButton(onClick = coordinator::closeSettings) {
+            OutlinedButton(onClick = {
+                runCatching { coordinator.closeSettings() }
+                    .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "关闭设置页失败") }
+            }) {
                 Text("取消")
             }
         }
     )
+    if (showLogs) {
+        LogBrowserDialog(onDismiss = { showLogs = false })
+    }
 }
 
 @Composable

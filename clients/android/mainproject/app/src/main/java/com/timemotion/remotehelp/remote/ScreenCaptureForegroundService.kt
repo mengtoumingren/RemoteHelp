@@ -11,31 +11,40 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.R
 
 class ScreenCaptureForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                notificationText = intent.getStringExtra(EXTRA_NOTIFICATION_TEXT) ?: notificationText
-                startAsForeground()
-                statusListener?.invoke(true)
-                messageListener?.invoke("前台屏幕共享服务已启动")
-            }
+        runCatching {
+            when (intent?.action) {
+                ACTION_START -> {
+                    notificationText = intent.getStringExtra(EXTRA_NOTIFICATION_TEXT) ?: notificationText
+                    startAsForeground()
+                    statusListener?.invoke(true)
+                    messageListener?.invoke("前台屏幕共享服务已启动")
+                }
 
-            ACTION_UPDATE -> {
-                notificationText = intent.getStringExtra(EXTRA_NOTIFICATION_TEXT) ?: notificationText
-                startAsForeground()
-            }
+                ACTION_UPDATE -> {
+                    notificationText = intent.getStringExtra(EXTRA_NOTIFICATION_TEXT) ?: notificationText
+                    startAsForeground()
+                }
 
-            ACTION_STOP -> stopSelf()
+                ACTION_STOP -> stopSelf()
+            }
+        }.onFailure {
+            AppLog.logThrowable("ScreenCaptureService", it, "屏幕共享前台服务启动异常")
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        statusListener?.invoke(false)
-        super.onDestroy()
+        runCatching {
+            statusListener?.invoke(false)
+            super.onDestroy()
+        }.onFailure {
+            AppLog.logThrowable("ScreenCaptureService", it, "屏幕共享前台服务销毁异常")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -87,23 +96,35 @@ class ScreenCaptureForegroundService : Service() {
         private var notificationText: String = "远程协助屏幕共享进行中"
 
         fun start(context: Context, notificationText: String = "远程协助屏幕共享进行中") {
-            val intent = Intent(context, ScreenCaptureForegroundService::class.java)
-                .setAction(ACTION_START)
-                .putExtra(EXTRA_NOTIFICATION_TEXT, notificationText)
-            ContextCompat.startForegroundService(context, intent)
+            runCatching {
+                val intent = Intent(context, ScreenCaptureForegroundService::class.java)
+                    .setAction(ACTION_START)
+                    .putExtra(EXTRA_NOTIFICATION_TEXT, notificationText)
+                ContextCompat.startForegroundService(context, intent)
+            }.onFailure {
+                AppLog.logThrowable("ScreenCaptureService", it, "启动前台服务失败")
+            }
         }
 
         fun updateNotification(context: Context, notificationText: String) {
-            val intent = Intent(context, ScreenCaptureForegroundService::class.java)
-                .setAction(ACTION_UPDATE)
-                .putExtra(EXTRA_NOTIFICATION_TEXT, notificationText)
-            context.startService(intent)
+            runCatching {
+                val intent = Intent(context, ScreenCaptureForegroundService::class.java)
+                    .setAction(ACTION_UPDATE)
+                    .putExtra(EXTRA_NOTIFICATION_TEXT, notificationText)
+                context.startService(intent)
+            }.onFailure {
+                AppLog.logThrowable("ScreenCaptureService", it, "更新前台通知失败")
+            }
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, ScreenCaptureForegroundService::class.java)
-                .setAction(ACTION_STOP)
-            context.startService(intent)
+            runCatching {
+                val intent = Intent(context, ScreenCaptureForegroundService::class.java)
+                    .setAction(ACTION_STOP)
+                context.startService(intent)
+            }.onFailure {
+                AppLog.logThrowable("ScreenCaptureService", it, "停止前台服务失败")
+            }
         }
     }
 }

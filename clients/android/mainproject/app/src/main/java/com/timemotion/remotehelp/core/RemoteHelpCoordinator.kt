@@ -486,22 +486,6 @@ class RemoteHelpCoordinator(
         _uiState.value = _uiState.value.copy(isSettingsVisible = true)
     }
 
-    fun openLogsDirectory() {
-        val currentPath = AppLog.logDirectoryPath(appContext)
-        runCatching {
-            AppLog.openLogsDirectory(appContext)
-        }.onFailure {
-            _uiState.value = _uiState.value.copy(
-                bannerMessage = if (currentPath.isNotBlank()) {
-                    "无法打开日志目录：$currentPath"
-                } else {
-                    "无法打开日志目录"
-                }
-            )
-            AppLog.logThrowable("RemoteHelpCoordinator", it, "打开日志目录失败")
-        }
-    }
-
     fun closeSettings() {
         _uiState.value = _uiState.value.copy(isSettingsVisible = false)
     }
@@ -635,7 +619,7 @@ class RemoteHelpCoordinator(
                 )
             }
         }
-        mainHandler.postDelayed(helperWaitTimeoutRunnable!!, HELPER_WAIT_TIMEOUT_MS)
+        helperWaitTimeoutRunnable?.let { mainHandler.postDelayed(it, HELPER_WAIT_TIMEOUT_MS) }
     }
 
     fun cancelHelperWaitTimeout() {

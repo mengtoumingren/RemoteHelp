@@ -65,12 +65,17 @@ class SignalClient(
     private var manualDisconnect = false
 
     fun connect(url: String, roomId: String, displayName: String) {
-        connectParams = ConnectParams(url.trim(), roomId.trim(), displayName.trim())
-        manualDisconnect = false
-        reconnectAttempt = 0
-        cancelReconnect()
-        closeCurrentSocket(1000, "reconnect")
-        openSocket()
+        runCatching {
+            connectParams = ConnectParams(url.trim(), roomId.trim(), displayName.trim())
+            manualDisconnect = false
+            reconnectAttempt = 0
+            cancelReconnect()
+            closeCurrentSocket(1000, "reconnect")
+            openSocket()
+        }.onFailure {
+            AppLog.logThrowable(TAG, it, "发起信令连接失败")
+            UiFeedbackBus.emitTopToast("信令连接失败，已记录日志")
+        }
     }
 
     fun sendSignal(type: String, targetClientId: String?, payload: JSONObject) {
@@ -107,8 +112,9 @@ class SignalClient(
 
     private fun openSocket() {
         val params = connectParams ?: return
-        val request = Request.Builder().url(params.url).build()
-        val socket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+        runCatching {
+            val request = Request.Builder().url(params.url).build()
+            val socket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (this@SignalClient.webSocket !== webSocket) {
                     return
@@ -194,8 +200,13 @@ class SignalClient(
                 }
                 scheduleReconnect("信令连接失败: ${t.message ?: "unknown"}")
             }
-        })
-        webSocket = socket
+            })
+            webSocket = socket
+        }.onFailure {
+            AppLog.logThrowable(TAG, it, "创建信令 WebSocket 失败")
+            UiFeedbackBus.emitTopToast("信令服务不可用，已记录日志")
+            onEvent(SignalEvent.Error("信令服务不可用"))
+        }
     }
 
     private fun scheduleReconnect(message: String) {
@@ -221,7 +232,7 @@ class SignalClient(
             }
             openSocket()
         }
-        mainHandler.postDelayed(reconnectRunnable!!, delayMs)
+        reconnectRunnable?.let { mainHandler.postDelayed(it, delayMs) }
     }
 
     private fun cancelReconnect() {

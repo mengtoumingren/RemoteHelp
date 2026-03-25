@@ -1,11 +1,7 @@
 package com.timemotion.remotehelp.core
 
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
-import android.os.Build
 import android.os.Environment
-import android.provider.DocumentsContract
 import android.util.Log
 import com.timemotion.remotehelp.ui.UiFeedbackBus
 import java.io.File
@@ -16,6 +12,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+
+data class LogFileInfo(
+    val fileName: String,
+    val lastModified: Long,
+    val sizeBytes: Long
+)
 
 object AppLog {
     private const val TAG = "RemoteHelp"
@@ -30,8 +32,6 @@ object AppLog {
     private var logDirectory: File? = null
     @Volatile
     private var crashHandlerInstalled = false
-    @Volatile
-    private var previousHandler: Thread.UncaughtExceptionHandler? = null
 
     fun install(context: Context) {
         if (appContext != null) {
@@ -44,10 +44,9 @@ object AppLog {
             appContext = context.applicationContext
             logDirectory = resolveLogDirectory(context.applicationContext).apply { mkdirs() }
             if (!crashHandlerInstalled) {
-                previousHandler = Thread.getDefaultUncaughtExceptionHandler()
                 Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                     logThrowable("UncaughtException", throwable, "thread=${thread.name}")
-                    previousHandler?.uncaughtException(thread, throwable)
+                    UiFeedbackBus.emitTopToast("应用发生异常，已记录到本地日志")
                 }
                 crashHandlerInstalled = true
             }
@@ -56,12 +55,10 @@ object AppLog {
 
     fun d(tag: String, message: String) {
         Log.d(tag, message)
-        append("D", tag, message, null)
     }
 
     fun i(tag: String, message: String) {
         Log.i(tag, message)
-        append("I", tag, message, null)
     }
 
     fun w(tag: String, message: String, throwable: Throwable? = null) {
@@ -92,30 +89,43 @@ object AppLog {
         return resolveLogDirectory(resolvedContext).absolutePath
     }
 
-    fun openLogsDirectory(context: Context) {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-            )
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                buildInitialTreeUri(context)?.let { putExtra(DocumentsContract.EXTRA_INITIAL_URI, it) }
+    fun listLogFiles(context: Context? = null): List<LogFileInfo> {
+        val resolvedContext = context ?: appContext ?: return emptyList()
+        val dir = resolveLogDirectory(resolvedContext)
+        return runCatching {
+            dir.mkdirs()
+            dir.listFiles()
+                ?.asSequence()
+                ?.filter { it.isFile && it.extension.equals("log", ignoreCase = true) }
+                ?.sortedByDescending { it.lastModified() }
+                ?.map {
+                    LogFileInfo(
+                        fileName = it.name,
+                        lastModified = it.lastModified(),
+                        sizeBytes = it.length()
+                    )
+                }
+                ?.toList()
+                .orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    fun readLogFile(context: Context? = null, fileName: String): String {
+        val resolvedContext = context ?: appContext ?: return ""
+        val dir = resolveLogDirectory(resolvedContext)
+        return runCatching {
+            val target = File(dir, fileName)
+            if (!target.exists() || !target.isFile) {
+                return@runCatching ""
             }
-        }
-        try {
-            context.startActivity(intent)
-        } catch (e: ActivityNotFoundException) {
-            UiFeedbackBus.emitTopToast("未找到可打开日志目录的文件管理器")
-            logThrowable("AppLog", e, "无法打开日志目录")
-        } catch (t: Throwable) {
-            UiFeedbackBus.emitTopToast("打开日志目录失败")
-            logThrowable("AppLog", t, "打开日志目录失败")
-        }
+            target.readText(Charsets.UTF_8)
+        }.getOrDefault("")
     }
 
     private fun append(level: String, tag: String, message: String, throwable: Throwable?) {
+        if (level != "W" && level != "E") {
+            return
+        }
         val currentContext = appContext ?: return
         val currentDir = logDirectory ?: resolveLogDirectory(currentContext).also {
             it.mkdirs()
@@ -160,8 +170,4 @@ object AppLog {
         return File(baseDir, LOG_SUBDIR)
     }
 
-    private fun buildInitialTreeUri(context: Context) = runCatching {
-        val docId = "primary:Android/data/${context.packageName}/files/Documents/$LOG_SUBDIR"
-        DocumentsContract.buildTreeDocumentUri("com.android.externalstorage.documents", docId)
-    }.getOrNull()
 }

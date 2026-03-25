@@ -61,13 +61,18 @@ class RemoteSignalClient(
     private var manualDisconnect = false
 
     fun connect(url: String, roomId: String, role: RemoteRole, displayName: String) {
-        this.roomId = roomId.trim()
-        connectParams = ConnectParams(url.trim(), roomId.trim(), role, displayName.trim())
-        manualDisconnect = false
-        reconnectAttempt = 0
-        cancelReconnect()
-        closeCurrentSocket(1000, "reconnect")
-        openSocket()
+        runCatching {
+            this.roomId = roomId.trim()
+            connectParams = ConnectParams(url.trim(), roomId.trim(), role, displayName.trim())
+            manualDisconnect = false
+            reconnectAttempt = 0
+            cancelReconnect()
+            closeCurrentSocket(1000, "reconnect")
+            openSocket()
+        }.onFailure {
+            AppLog.logThrowable("RemoteSignalClient", it, "发起远控信令连接失败")
+            UiFeedbackBus.emitTopToast("远控信令连接失败，已记录日志")
+        }
     }
 
     fun sendTargetStatus(status: RemoteTargetStatus) {
@@ -113,9 +118,10 @@ class RemoteSignalClient(
 
     private fun openSocket() {
         val params = connectParams ?: return
-        val socket = okHttpClient.newWebSocket(
-            Request.Builder().url(params.url).build(),
-            object : WebSocketListener() {
+        runCatching {
+            val socket = okHttpClient.newWebSocket(
+                Request.Builder().url(params.url).build(),
+                object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     if (this@RemoteSignalClient.webSocket !== webSocket) {
                         return
@@ -205,9 +211,14 @@ class RemoteSignalClient(
                     }
                     scheduleReconnect("远控连接失败: ${t.message ?: "unknown"}")
                 }
-            }
-        )
-        webSocket = socket
+                }
+            )
+            webSocket = socket
+        }.onFailure {
+            AppLog.logThrowable("RemoteSignalClient", it, "创建远控 WebSocket 失败")
+            UiFeedbackBus.emitTopToast("远控服务不可用，已记录日志")
+            onEvent(RemoteSignalEvent.Error("远控服务不可用"))
+        }
     }
 
     private fun scheduleReconnect(message: String) {
@@ -232,7 +243,7 @@ class RemoteSignalClient(
             }
             openSocket()
         }
-        mainHandler.postDelayed(reconnectRunnable!!, delayMs)
+        reconnectRunnable?.let { mainHandler.postDelayed(it, delayMs) }
     }
 
     private fun cancelReconnect() {
