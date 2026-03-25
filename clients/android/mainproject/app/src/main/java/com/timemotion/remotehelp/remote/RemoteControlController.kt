@@ -213,6 +213,34 @@ class RemoteControlController(
         )
     }
 
+    fun sendTextCommand(text: String) {
+        if (text.isEmpty()) {
+            return
+        }
+        sendCommand(
+            RemoteCommand(
+                action = RemoteAction.TEXT_INPUT,
+                text = text
+            )
+        )
+    }
+
+    fun sendBackspaceCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.BACKSPACE))
+    }
+
+    fun sendCursorLeftCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.CURSOR_LEFT))
+    }
+
+    fun sendCursorRightCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.CURSOR_RIGHT))
+    }
+
+    fun sendEnterCommand() {
+        sendCommand(RemoteCommand(action = RemoteAction.ENTER))
+    }
+
     fun sendBackCommand() {
         sendCommand(RemoteCommand(action = RemoteAction.BACK))
     }

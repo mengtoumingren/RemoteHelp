@@ -28,15 +28,21 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -45,6 +51,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
@@ -76,6 +84,9 @@ fun RemoteAssistScreen(
     onFrameTap: (Float, Float) -> Unit,
     onFrameSwipe: (Float, Float, Float, Float) -> Unit,
     onFrameDrag: (Float, Float, Float, Float) -> Unit,
+    onSendText: (String) -> Unit,
+    onSendBackspace: () -> Unit,
+    onSendEnter: () -> Unit,
     onSendBack: () -> Unit,
     onSendHome: () -> Unit,
     onSendRecents: () -> Unit
@@ -97,6 +108,9 @@ fun RemoteAssistScreen(
                 bottomBar = {
                     Box(modifier = Modifier.fillMaxWidth()) {
                         HelperAssistBottomBar(
+                            onSendText = onSendText,
+                            onSendBackspace = onSendBackspace,
+                            onSendEnter = onSendEnter,
                             onSendBack = onSendBack,
                             onSendHome = onSendHome,
                             onSendRecents = onSendRecents,
@@ -242,6 +256,9 @@ private fun AssistTopOverlay(
 
 @Composable
 private fun HelperAssistBottomBar(
+    onSendText: (String) -> Unit,
+    onSendBackspace: () -> Unit,
+    onSendEnter: () -> Unit,
     onSendBack: () -> Unit,
     onSendHome: () -> Unit,
     onSendRecents: () -> Unit,
@@ -253,69 +270,163 @@ private fun HelperAssistBottomBar(
     onToggleSpeaker: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var keyboardEnabled by rememberSaveable { mutableStateOf(false) }
     Box(
         modifier = modifier
             .background(Color(0xFF122030))
-            .padding(vertical = 10.dp),
+            .padding(vertical = 10.dp, horizontal = 12.dp),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            val itemWidth = 56.dp
-            AssistFloatingButton(
-                title = "返回",
-                onClick = onSendBack,
-                modifier = Modifier.width(itemWidth)
-            )
-            AssistFloatingButton(
-                title = "桌面",
-                onClick = onSendHome,
-                modifier = Modifier.width(itemWidth)
-            )
-            AssistFloatingButton(
-                title = "菜单",
-                onClick = onSendRecents,
-                modifier = Modifier.width(itemWidth)
-            )
-            Box(
-                modifier = Modifier.wrapContentSize(Alignment.TopEnd)
+            if (keyboardEnabled) {
+                HelperAssistTextInputDock(
+                    onSendText = onSendText,
+                    onSendBackspace = onSendBackspace,
+                    onSendEnter = onSendEnter
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
-                    onClick = onOpenMore,
-                    modifier = Modifier.width(itemWidth),
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color(0x22324458),
-                        contentColor = Color(0xFFE8EFF6)
-                    )
+                val itemWidth = 56.dp
+                AssistFloatingButton(
+                    title = "返回",
+                    onClick = onSendBack,
+                    modifier = Modifier.width(itemWidth)
+                )
+                AssistFloatingButton(
+                    title = "桌面",
+                    onClick = onSendHome,
+                    modifier = Modifier.width(itemWidth)
+                )
+                AssistFloatingButton(
+                    title = "菜单",
+                    onClick = onSendRecents,
+                    modifier = Modifier.width(itemWidth)
+                )
+                AssistFloatingButton(
+                    title = "键盘",
+                    active = keyboardEnabled,
+                    onClick = { keyboardEnabled = !keyboardEnabled },
+                    modifier = Modifier.width(itemWidth)
+                )
+                Box(
+                    modifier = Modifier.wrapContentSize(Alignment.TopEnd)
                 ) {
-                    Text("更多")
-                }
-                DropdownMenu(
-                    expanded = isMoreMenuVisible,
-                    onDismissRequest = onDismissMore
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (isSpeakerOn) "关闭外放" else "开启外放") },
-                        onClick = {
-                            onDismissMore()
-                            onToggleSpeaker()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("结束协助") },
-                        onClick = {
-                            onDismissMore()
-                            onEndClick()
-                        }
-                    )
+                    OutlinedButton(
+                        onClick = onOpenMore,
+                        modifier = Modifier.width(itemWidth),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color(0x22324458),
+                            contentColor = Color(0xFFE8EFF6)
+                        )
+                    ) {
+                        Text("更多")
+                    }
+                    DropdownMenu(
+                        expanded = isMoreMenuVisible,
+                        onDismissRequest = onDismissMore
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (isSpeakerOn) "关闭外放" else "开启外放") },
+                            onClick = {
+                                onDismissMore()
+                                onToggleSpeaker()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("结束协助") },
+                            onClick = {
+                                onDismissMore()
+                                onEndClick()
+                            }
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HelperAssistTextInputDock(
+    onSendText: (String) -> Unit,
+    onSendBackspace: () -> Unit,
+    onSendEnter: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    var inputValue by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    Box(
+        modifier = Modifier
+            .size(1.dp)
+            .alpha(0f)
+    ) {
+        OutlinedTextField(
+            value = inputValue,
+            onValueChange = { nextText ->
+                val previousText = inputValue
+                when {
+                    nextText == previousText -> Unit
+                    nextText.startsWith(previousText) -> {
+                        val inserted = nextText.substring(previousText.length)
+                        if (inserted.isNotEmpty()) {
+                            sendTypedText(inserted, onSendText, onSendEnter)
+                        }
+                    }
+                    previousText.startsWith(nextText) -> {
+                        val removedCount = previousText.length - nextText.length
+                        repeat(removedCount.coerceAtLeast(0)) {
+                            onSendBackspace()
+                        }
+                    }
+                }
+                inputValue = nextText
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(focusRequester)
+                .background(Color.Transparent),
+            singleLine = true,
+            placeholder = null,
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
+    }
+}
+
+private fun sendTypedText(
+    text: String,
+    onSendText: (String) -> Unit,
+    onSendEnter: () -> Unit
+) {
+    if (text.isEmpty()) {
+        return
+    }
+    val parts = text.split('\n')
+    parts.forEachIndexed { index, part ->
+        if (part.isNotEmpty()) {
+            onSendText(part)
+        }
+        if (index < parts.lastIndex) {
+            onSendEnter()
         }
     }
 }

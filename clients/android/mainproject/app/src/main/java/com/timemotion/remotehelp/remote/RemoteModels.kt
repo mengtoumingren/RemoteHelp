@@ -17,6 +17,11 @@ enum class RemoteAction {
     TAP,
     SWIPE,
     DRAG,
+    TEXT_INPUT,
+    BACKSPACE,
+    CURSOR_LEFT,
+    CURSOR_RIGHT,
+    ENTER,
     BACK,
     HOME,
     RECENTS
@@ -37,7 +42,8 @@ data class RemoteCommand(
     val endNormalizedX: Float? = null,
     val endNormalizedY: Float? = null,
     val endScreenX: Int? = null,
-    val endScreenY: Int? = null
+    val endScreenY: Int? = null,
+    val text: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("action", action.name)
@@ -49,6 +55,7 @@ data class RemoteCommand(
         .put("endNormalizedY", endNormalizedY?.toDouble())
         .put("endScreenX", endScreenX)
         .put("endScreenY", endScreenY)
+        .put("text", text)
 
     companion object {
         fun fromJson(json: JSONObject): RemoteCommand = RemoteCommand(
@@ -60,7 +67,8 @@ data class RemoteCommand(
             endNormalizedX = if (json.has("endNormalizedX")) json.getDouble("endNormalizedX").toFloat() else null,
             endNormalizedY = if (json.has("endNormalizedY")) json.getDouble("endNormalizedY").toFloat() else null,
             endScreenX = if (json.has("endScreenX")) json.optInt("endScreenX") else null,
-            endScreenY = if (json.has("endScreenY")) json.optInt("endScreenY") else null
+            endScreenY = if (json.has("endScreenY")) json.optInt("endScreenY") else null,
+            text = if (json.has("text") && !json.isNull("text")) json.getString("text") else null
         )
     }
 }
