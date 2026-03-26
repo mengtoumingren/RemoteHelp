@@ -317,7 +317,12 @@ class RemoteHelpVerificationManager(
                             "${fromDisplayName.ifBlank { "对端" }} 已通过视频验证，请手动进入远程协助"
                         }
                     )
-                    if (shouldAutoEnterAssist()) {
+                    if (uiState.value.side == DeviceSide.HELPER) {
+                        mainHandler.post {
+                            runCatching { openAssist() }
+                                .onFailure { AppLog.logThrowable("RemoteHelpCoordinator", it, "打开远程协助失败") }
+                        }
+                    } else if (shouldAutoEnterAssist()) {
                         mainHandler.post {
                             runCatching { openAssist() }
                                 .onFailure { AppLog.logThrowable("RemoteHelpCoordinator", it, "打开远程协助失败") }

@@ -42,6 +42,7 @@ import androidx.core.content.getSystemService
 import com.timemotion.remotehelp.R
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.core.DashboardPage
 import com.timemotion.remotehelp.core.formatDateTime
 import com.timemotion.remotehelp.core.RemoteHelpUiState
 import com.timemotion.remotehelp.ui.shared.VerificationRequestDialogHost
@@ -59,6 +60,30 @@ fun DashboardRoute(viewModel: DashboardViewModel) {
         onDismissInvite = viewModel::dismissPendingInvite,
         onConfirmInvite = viewModel::confirmPendingInvite
     )
+    when (uiState.dashboardPage) {
+        DashboardPage.MAIN -> DashboardMainPage(uiState, viewModel)
+        DashboardPage.SETTINGS -> SettingsPage(
+            uiState = uiState,
+            onServerUrlChange = viewModel::updateServerUrl,
+            onHelperNameChange = viewModel::updateHelperName,
+            onSave = {
+                viewModel.saveSettings()
+                viewModel.closeDashboardPage()
+            },
+            onDismiss = viewModel::closeDashboardPage,
+            onOpenLogs = viewModel::openLogs,
+            onOpenEvidence = viewModel::openEvidence
+        )
+        DashboardPage.LOGS -> LogBrowserPage(onDismiss = viewModel::goBackDashboardPage)
+        DashboardPage.EVIDENCE -> EvidenceBrowserPage(onDismiss = viewModel::goBackDashboardPage)
+    }
+}
+
+@Composable
+private fun DashboardMainPage(
+    uiState: RemoteHelpUiState,
+    viewModel: DashboardViewModel
+) {
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
         LazyColumn(
             modifier = Modifier
@@ -134,15 +159,6 @@ private fun DashboardTopHero(
                 }
             }
         }
-    }
-    if (uiState.isSettingsVisible) {
-        SettingsDialog(
-            uiState = uiState,
-            onServerUrlChange = viewModel::updateServerUrl,
-            onHelperNameChange = viewModel::updateHelperName,
-            onSave = viewModel::saveSettings,
-            onDismiss = viewModel::closeSettings
-        )
     }
 }
 

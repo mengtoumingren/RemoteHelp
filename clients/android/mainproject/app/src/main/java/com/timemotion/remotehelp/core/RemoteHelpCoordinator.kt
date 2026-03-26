@@ -196,6 +196,22 @@ class RemoteHelpCoordinator(
         sessionManager.closeSettings()
     }
 
+    fun openLogs() {
+        sessionManager.openLogs()
+    }
+
+    fun openEvidence() {
+        sessionManager.openEvidence()
+    }
+
+    fun goBackDashboardPage() {
+        sessionManager.goBackDashboardPage()
+    }
+
+    fun closeDashboardPage() {
+        sessionManager.closeDashboardPage()
+    }
+
     fun saveSettings() {
         settingsManager.saveSettings()
     }

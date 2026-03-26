@@ -27,7 +27,6 @@ class RemoteHelpSettingsManager(
             helperName = uiState.value.helperName.trim()
         )
         uiState.value = uiState.value.copy(
-            isSettingsVisible = false,
             bannerMessage = "设置已保存"
         )
     }

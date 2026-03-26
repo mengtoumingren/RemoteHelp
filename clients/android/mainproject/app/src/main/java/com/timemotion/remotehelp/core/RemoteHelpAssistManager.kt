@@ -38,12 +38,16 @@ class RemoteHelpAssistManager(
         )
     }
 
-    fun finishSession(reason: String, clearInviteEntry: Boolean = false) {
+    fun finishSession(
+        reason: String,
+        clearInviteEntry: Boolean = false,
+        broadcastAssistEnded: Boolean = true
+    ) {
         cancelHelperWaitTimeout()
         val session = uiState.value.activeSession
         if (
+            broadcastAssistEnded &&
             session != null &&
-            uiState.value.side == DeviceSide.HELPER &&
             uiState.value.currentScreen == AppScreen.ASSIST
         ) {
             runCatching {
@@ -96,7 +100,7 @@ class RemoteHelpAssistManager(
         if (uiState.value.side != DeviceSide.ELDER || uiState.value.currentScreen != AppScreen.ASSIST) {
             return
         }
-        finishSession("协助方已退出远程协助")
+        finishSession("协助方已退出远程协助", broadcastAssistEnded = false)
     }
 
     fun handleCallSignal(signalType: String, payload: JSONObject): Boolean {
@@ -104,10 +108,10 @@ class RemoteHelpAssistManager(
         return when (signalType) {
             SIGNAL_ASSIST_ENDED -> {
                 val requestId = payload.optString("requestId")
-                if (requestId == session.requestId && uiState.value.side == DeviceSide.ELDER) {
+                if (requestId == session.requestId && uiState.value.currentScreen == AppScreen.ASSIST) {
                     finishSession(payload.optString("reason").ifBlank {
                         "协助方已退出远程协助"
-                    })
+                    }, broadcastAssistEnded = false)
                     true
                 } else {
                     false

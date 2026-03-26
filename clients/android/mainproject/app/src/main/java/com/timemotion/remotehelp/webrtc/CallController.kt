@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.AudioManager
@@ -895,7 +896,16 @@ class CallController(
         }
         return try {
             withContext(Dispatchers.Default) {
-                i420BufferToBitmap(buffer, -90f)
+                i420BufferToBitmap(buffer)?.let { source ->
+                    val matrix = Matrix().apply {
+                        postRotate(-90f)
+                    }
+                    Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true).also {
+                        if (it != source) {
+                            source.recycle()
+                        }
+                    }
+                }
             }.also {
                 if (it == null) {
                     AppLog.d("CallController", "抓取协助者画面失败：帧转换失败")

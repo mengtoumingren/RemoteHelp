@@ -155,10 +155,45 @@ class RemoteHelpSessionManager(
     }
 
     fun openSettings() {
-        uiState.value = uiState.value.copy(isSettingsVisible = true)
+        openDashboardPage(DashboardPage.SETTINGS)
     }
 
     fun closeSettings() {
-        uiState.value = uiState.value.copy(isSettingsVisible = false)
+        closeDashboardPage()
+    }
+
+    fun openLogs() {
+        openDashboardPage(DashboardPage.LOGS)
+    }
+
+    fun openEvidence() {
+        openDashboardPage(DashboardPage.EVIDENCE)
+    }
+
+    fun goBackDashboardPage() {
+        val state = uiState.value
+        val target = state.dashboardPreviousPage ?: DashboardPage.MAIN
+        uiState.value = state.copy(
+            dashboardPage = target,
+            dashboardPreviousPage = null
+        )
+    }
+
+    fun closeDashboardPage() {
+        uiState.value = uiState.value.copy(
+            dashboardPage = DashboardPage.MAIN,
+            dashboardPreviousPage = null
+        )
+    }
+
+    private fun openDashboardPage(page: DashboardPage) {
+        val state = uiState.value
+        if (state.dashboardPage == page) {
+            return
+        }
+        uiState.value = state.copy(
+            dashboardPreviousPage = state.dashboardPage,
+            dashboardPage = page
+        )
     }
 }

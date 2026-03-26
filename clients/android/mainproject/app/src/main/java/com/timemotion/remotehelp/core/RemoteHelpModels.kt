@@ -22,6 +22,13 @@ enum class AppScreen {
     ASSIST
 }
 
+enum class DashboardPage {
+    MAIN,
+    SETTINGS,
+    LOGS,
+    EVIDENCE
+}
+
 data class RecentContact(
     val name: String,
     val phone: String,
@@ -73,8 +80,9 @@ data class RemoteHelpUiState(
     val recentContacts: List<RecentContact> = emptyList(),
     val history: List<SessionHistoryItem> = emptyList(),
     val currentScreen: AppScreen = AppScreen.DASHBOARD,
+    val dashboardPage: DashboardPage = DashboardPage.MAIN,
+    val dashboardPreviousPage: DashboardPage? = null,
     val bannerMessage: String? = null,
-    val isSettingsVisible: Boolean = false,
     val helperLocationPermissionGranted: Boolean = false,
     val helperLocationSummary: String? = null,
     val helperLocationUpdatedAt: Long? = null
