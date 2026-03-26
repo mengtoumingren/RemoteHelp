@@ -17,6 +17,8 @@ import com.timemotion.remotehelp.MainActivity
 import com.timemotion.remotehelp.R
 import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.core.AppScreen
+import com.timemotion.remotehelp.core.SecurityEvidenceRecord
+import com.timemotion.remotehelp.core.SecurityEvidenceStore
 import com.timemotion.remotehelp.core.RemoteHelpCoordinator
 import com.timemotion.remotehelp.core.RemoteHelpUiState
 import com.timemotion.remotehelp.core.DeviceSide
@@ -33,6 +35,7 @@ import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class RemoteHelpForegroundService : Service() {
     inner class LocalBinder : Binder() {
@@ -45,6 +48,7 @@ class RemoteHelpForegroundService : Service() {
     private var currentNotificationText = "远程协助后台服务运行中"
     private lateinit var coordinatorInternal: RemoteHelpCoordinator
     private lateinit var helperOverlayManager: HelperVideoOverlayManager
+    private lateinit var evidenceStore: SecurityEvidenceStore
     @Volatile
     private var helperOverlayRequested = false
     @Volatile
@@ -56,6 +60,9 @@ class RemoteHelpForegroundService : Service() {
     private var helperOverlayPreviewJob: Job? = null
     @Volatile
     private var helperOverlayPreviewSessionId: String? = null
+    private var evidenceCaptureJob: Job? = null
+    @Volatile
+    private var evidenceCaptureSessionId: String? = null
 
     val coordinator: RemoteHelpCoordinator
         get() = coordinatorInternal
@@ -67,6 +74,7 @@ class RemoteHelpForegroundService : Service() {
             createNotificationChannel()
             startAsForeground(currentNotificationText)
             coordinatorInternal = RemoteHelpCoordinator(applicationContext)
+            evidenceStore = SecurityEvidenceStore(applicationContext)
             helperOverlayManager = HelperVideoOverlayManager(applicationContext)
             observeCoordinatorState()
         }.onFailure {
@@ -111,10 +119,12 @@ class RemoteHelpForegroundService : Service() {
             helperOverlayRefreshJob?.cancel()
             helperOverlayAutoShowJob?.cancel()
             helperOverlayPreviewJob?.cancel()
+            evidenceCaptureJob?.cancel()
             helperOverlayRequested = false
             helperOverlayRequestedSessionId = null
             helperOverlayAutoShownSessionId = null
             helperOverlayPreviewSessionId = null
+            evidenceCaptureSessionId = null
             if (this::helperOverlayManager.isInitialized) {
                 runCatching { helperOverlayManager.hide() }
             }
@@ -133,13 +143,15 @@ class RemoteHelpForegroundService : Service() {
         serviceScope.launch {
             combine(
                 coordinatorInternal.uiState,
-                coordinatorInternal.callController.uiState
-            ) { uiState, callState ->
-                uiState to callState
-            }.collectLatest { (uiState, callState) ->
+                coordinatorInternal.callController.uiState,
+                coordinatorInternal.remoteController.uiState
+            ) { uiState, callState, remoteState ->
+                Triple(uiState, callState, remoteState)
+            }.collectLatest { (uiState, callState, remoteState) ->
                 currentNotificationText = buildNotificationText(uiState)
                 refreshNotification()
                 scheduleHelperOverlayRefresh(uiState, callState)
+                scheduleEvidenceCapture(uiState, callState, remoteState)
             }
         }
     }
@@ -169,6 +181,8 @@ class RemoteHelpForegroundService : Service() {
         helperOverlayRefreshJob?.cancel()
         helperOverlayPreviewJob?.cancel()
         helperOverlayPreviewSessionId = null
+        evidenceCaptureJob?.cancel()
+        evidenceCaptureSessionId = null
         serviceScope.launch {
             runCatching { helperOverlayManager.hide() }
                 .onFailure {
@@ -267,6 +281,99 @@ class RemoteHelpForegroundService : Service() {
                 delay(OVERLAY_PREVIEW_INTERVAL_MS)
             }
             helperOverlayManager.updatePreview(null)
+        }
+    }
+
+    private fun scheduleEvidenceCapture(
+        uiState: RemoteHelpUiState,
+        callState: CallUiState,
+        remoteState: RemoteControlUiState
+    ) {
+        val sessionId = uiState.activeSession?.requestId
+        val shouldCapture =
+            uiState.side == DeviceSide.ELDER &&
+                uiState.activeSession?.verificationAcceptedAt != null &&
+                uiState.currentScreen in setOf(AppScreen.VERIFICATION, AppScreen.ASSIST)
+        if (!shouldCapture || sessionId == null) {
+            evidenceCaptureJob?.cancel()
+            evidenceCaptureJob = null
+            evidenceCaptureSessionId = null
+            return
+        }
+        if (
+            evidenceCaptureJob?.isActive == true &&
+            evidenceCaptureSessionId == sessionId
+        ) {
+            return
+        }
+        evidenceCaptureJob?.cancel()
+        evidenceCaptureSessionId = sessionId
+        evidenceCaptureJob = serviceScope.launch {
+            while (isActive) {
+                val latestUiState = coordinatorInternal.uiState.value
+                val latestCallState = coordinatorInternal.callController.uiState.value
+                val latestRemoteState = coordinatorInternal.remoteController.uiState.value
+                val latestSessionId = latestUiState.activeSession?.requestId
+                val latestShouldCapture =
+                    latestUiState.side == DeviceSide.ELDER &&
+                        latestUiState.activeSession?.verificationAcceptedAt != null &&
+                        latestUiState.currentScreen in setOf(AppScreen.VERIFICATION, AppScreen.ASSIST) &&
+                        latestSessionId == sessionId
+                if (!latestShouldCapture) {
+                    break
+                }
+                runCatching {
+                    captureEvidenceSnapshot(
+                        uiState = latestUiState,
+                        callState = latestCallState,
+                        remoteState = latestRemoteState
+                    )
+                }.onFailure {
+                    if (it !is CancellationException) {
+                        AppLog.logThrowable("RemoteHelpFgService", it, "定时证据采集失败")
+                    }
+                }
+                delay(EVIDENCE_CAPTURE_INTERVAL_MS)
+            }
+        }
+    }
+
+    private suspend fun captureEvidenceSnapshot(
+        uiState: RemoteHelpUiState,
+        callState: CallUiState,
+        remoteState: RemoteControlUiState
+    ) {
+        val sessionId = uiState.activeSession?.requestId ?: return
+        val helperBitmap = coordinatorInternal.callController.captureRemoteVideoBitmap()
+            ?: throw IllegalStateException("协助方视频截图失败")
+        val screenBitmap = coordinatorInternal.callController.captureAssistScreenBitmap()
+            ?: throw IllegalStateException("屏幕采集截图失败")
+        val timestamp = System.currentTimeMillis()
+        val record = SecurityEvidenceRecord(
+            sessionId = sessionId,
+            helperName = uiState.activeSession?.helperName ?: uiState.helperName,
+            elderName = uiState.activeSession?.elderName ?: uiState.elderName,
+            capturedAt = timestamp,
+            callStatus = callState.status,
+            remoteStatus = remoteState.status,
+            targetStatus = remoteState.targetStatus.message,
+            locationSummary = uiState.helperLocationSummary,
+            locationPermissionGranted = uiState.helperLocationPermissionGranted,
+            helperLocationUpdatedAt = uiState.helperLocationUpdatedAt,
+            helperCameraFileName = "helper_camera_${timestamp}.jpg",
+            screenScreenshotFileName = "${timestamp}.jpg"
+        )
+        try {
+            withContext(Dispatchers.IO) {
+                evidenceStore.saveSnapshot(record, helperBitmap, screenBitmap)
+            }
+        } finally {
+            if (!helperBitmap.isRecycled) {
+                helperBitmap.recycle()
+            }
+            if (!screenBitmap.isRecycled) {
+                screenBitmap.recycle()
+            }
         }
     }
 
@@ -385,6 +492,7 @@ class RemoteHelpForegroundService : Service() {
         private const val ACTION_REFRESH = "remote_help_background_refresh"
         private const val AUTO_SHOW_DELAY_MS = 1_200L
         private const val OVERLAY_PREVIEW_INTERVAL_MS = 100L
+        private const val EVIDENCE_CAPTURE_INTERVAL_MS = 5_000L
         private const val OVERLAY_PREVIEW_SIZE_PX = 96
 
         fun start(context: Context) {

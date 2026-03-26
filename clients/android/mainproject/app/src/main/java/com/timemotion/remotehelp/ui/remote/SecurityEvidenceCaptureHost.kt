@@ -1,29 +1,20 @@
 package com.timemotion.remotehelp.ui.remote
 
-import android.app.Activity
 import android.graphics.Bitmap
-import android.os.Handler
-import android.os.Looper
-import android.view.PixelCopy
-import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.core.SecurityEvidenceRecord
 import com.timemotion.remotehelp.core.SecurityEvidenceStore
-import com.timemotion.remotehelp.core.findActivity
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 
 @Composable
 fun SecurityEvidenceCaptureHost(
@@ -37,10 +28,10 @@ fun SecurityEvidenceCaptureHost(
     helperLocationSummary: String?,
     helperLocationUpdatedAt: Long?,
     captureHelperCameraBitmap: suspend () -> Bitmap?,
+    captureAssistScreenBitmap: suspend () -> Bitmap?,
     onCaptureSaved: (SecurityEvidenceRecord) -> Unit
 ) {
     val context = LocalContext.current
-    val view = LocalView.current
     val store = remember(context) { SecurityEvidenceStore(context.applicationContext) }
     val latestSessionId by rememberUpdatedState(sessionId)
     val latestHelperName by rememberUpdatedState(helperName)
@@ -51,6 +42,7 @@ fun SecurityEvidenceCaptureHost(
     val latestHelperLocationSummary by rememberUpdatedState(helperLocationSummary)
     val latestHelperLocationUpdatedAt by rememberUpdatedState(helperLocationUpdatedAt)
     val latestCaptureHelperCameraBitmap by rememberUpdatedState(captureHelperCameraBitmap)
+    val latestCaptureAssistScreenBitmap by rememberUpdatedState(captureAssistScreenBitmap)
     val latestOnCaptureSaved by rememberUpdatedState(onCaptureSaved)
 
     LaunchedEffect(enabled, sessionId) {
@@ -61,8 +53,6 @@ fun SecurityEvidenceCaptureHost(
         while (isActive && enabled && !latestSessionId.isNullOrBlank()) {
             runCatching {
                 captureAndStoreEvidence(
-                    context = context,
-                    view = view,
                     store = store,
                     sessionId = latestSessionId.orEmpty(),
                     helperName = latestHelperName,
@@ -72,7 +62,8 @@ fun SecurityEvidenceCaptureHost(
                     locationPermissionGranted = latestLocationPermissionGranted,
                     helperLocationSummary = latestHelperLocationSummary,
                     helperLocationUpdatedAt = latestHelperLocationUpdatedAt,
-                    captureHelperCameraBitmap = latestCaptureHelperCameraBitmap
+                    captureHelperCameraBitmap = latestCaptureHelperCameraBitmap,
+                    captureAssistScreenBitmap = latestCaptureAssistScreenBitmap
                 ).also { record ->
                     latestOnCaptureSaved(record)
                 }
@@ -85,8 +76,6 @@ fun SecurityEvidenceCaptureHost(
 }
 
 private suspend fun captureAndStoreEvidence(
-    context: android.content.Context,
-    view: View,
     store: SecurityEvidenceStore,
     sessionId: String,
     helperName: String,
@@ -96,13 +85,11 @@ private suspend fun captureAndStoreEvidence(
     locationPermissionGranted: Boolean,
     helperLocationSummary: String?,
     helperLocationUpdatedAt: Long?,
-    captureHelperCameraBitmap: suspend () -> Bitmap?
+    captureHelperCameraBitmap: suspend () -> Bitmap?,
+    captureAssistScreenBitmap: suspend () -> Bitmap?
 ): SecurityEvidenceRecord {
-    val activity = context.findActivity() ?: throw IllegalStateException("未找到 Activity，无法采集截图")
-    val width = view.width.takeIf { it > 0 } ?: throw IllegalStateException("当前窗口宽度无效")
-    val height = view.height.takeIf { it > 0 } ?: throw IllegalStateException("当前窗口高度无效")
     val helperBitmap = captureHelperCameraBitmap() ?: throw IllegalStateException("协助方视频截图失败")
-    val screenBitmap = captureWindowBitmap(activity, width, height) ?: throw IllegalStateException("窗口截图失败")
+    val screenBitmap = captureAssistScreenBitmap() ?: throw IllegalStateException("屏幕采集截图失败")
     val timestamp = System.currentTimeMillis()
     val record = SecurityEvidenceRecord(
         sessionId = sessionId,
@@ -133,25 +120,5 @@ private suspend fun captureAndStoreEvidence(
     return persistedRecord
 }
 
-private suspend fun captureWindowBitmap(activity: Activity, width: Int, height: Int): Bitmap? {
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    return suspendCancellableCoroutine { continuation ->
-        val handler = Handler(Looper.getMainLooper())
-        PixelCopy.request(activity.window, bitmap, { result -> 
-            if (result == PixelCopy.SUCCESS) {
-                continuation.resume(bitmap)
-            } else {
-                bitmap.recycle()
-                continuation.resume(null)
-            }
-        }, handler)
-        continuation.invokeOnCancellation {
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
-        }
-    }
-}
-
 private const val FIRST_CAPTURE_DELAY_MS = 0L
-private const val CAPTURE_INTERVAL_MS = 10_000L
+private const val CAPTURE_INTERVAL_MS = 5_000L

@@ -5,7 +5,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
-import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.AudioManager
@@ -16,6 +15,7 @@ import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
@@ -304,6 +304,7 @@ class CallController(
             screenVideoTrack?.setEnabled(true)
             screenVideoSender?.setTrack(screenVideoTrack, false)
             configureScreenShareSender()
+            publishRendererViews()
             return true
         }
         return runCatching {
@@ -337,6 +338,7 @@ class CallController(
             screenVideoSender?.setTrack(track, false)
             configureScreenShareSender()
             attachLocalTracksToPeerConnection()
+            publishRendererViews()
             AppLog.d("CallController", "屏幕共享采集已启动, sender=${screenVideoSender != null}, track=${track.id()}")
             setStatus("屏幕共享已启动")
             true
@@ -764,6 +766,14 @@ class CallController(
         capturer.dispose()
         screenSurfaceTextureHelper?.dispose()
         screenSurfaceTextureHelper = null
+        if (assistFrameSinkTrack === screenVideoTrack) {
+            screenVideoTrack?.removeSink(assistFrameSink)
+            assistFrameSinkTrack = null
+            synchronized(assistFrameSinkLock) {
+                assistFrameBuffer?.release()
+                assistFrameBuffer = null
+            }
+        }
         screenVideoTrack?.setEnabled(false)
         if (restoreLocalCamera && _uiState.value.isCameraEnabled) {
             resumeAfterForeground()
@@ -854,10 +864,10 @@ class CallController(
             remoteVideoTrack?.addSink(remoteFrameSink)
             remoteFrameSinkTrack = remoteVideoTrack
         }
-        if (remoteScreenTrack != null && assistFrameSinkTrack !== remoteScreenTrack) {
+        if (screenVideoTrack != null && assistFrameSinkTrack !== screenVideoTrack) {
             assistFrameSinkTrack?.removeSink(assistFrameSink)
-            remoteScreenTrack?.addSink(assistFrameSink)
-            assistFrameSinkTrack = remoteScreenTrack
+            screenVideoTrack?.addSink(assistFrameSink)
+            assistFrameSinkTrack = screenVideoTrack
         }
         if (remoteScreenTrack != null && !assistRendererAttached) {
             remoteScreenTrack?.addSink(assistSurfaceView)
@@ -865,7 +875,7 @@ class CallController(
         }
         AppLog.d(
             "CallController",
-            "刷新渲染视图 local=${localVideoTrack != null}, remote=${remoteVideoTrack != null}, assist=${remoteScreenTrack != null}"
+            "刷新渲染视图 local=${localVideoTrack != null}, remote=${remoteVideoTrack != null}, assistRender=${remoteScreenTrack != null}, screenShare=${screenVideoTrack != null}"
         )
         _uiState.value = _uiState.value.copy(
             localRenderer = if (localVideoTrack != null) localSurfaceView else null,
@@ -885,7 +895,7 @@ class CallController(
         }
         return try {
             withContext(Dispatchers.Default) {
-                i420BufferToBitmap(buffer)
+                i420BufferToBitmap(buffer, -90f)
             }.also {
                 if (it == null) {
                     AppLog.d("CallController", "抓取协助者画面失败：帧转换失败")
@@ -897,25 +907,34 @@ class CallController(
     }
 
     suspend fun captureAssistScreenBitmap(): Bitmap? {
-        val buffer = synchronized(assistFrameSinkLock) {
-            val current = assistFrameBuffer ?: run {
-                AppLog.d("CallController", "抓取协助页画面失败：暂无缓存帧")
-                return null
+        for (attempt in 0 until 10) {
+            val buffer = synchronized(assistFrameSinkLock) {
+                val current = assistFrameBuffer
+                if (current != null) {
+                    current.retain()
+                }
+                current
             }
-            current.retain()
-            current
-        }
-        return try {
-            withContext(Dispatchers.Default) {
-                i420BufferToBitmap(buffer)
-            }.also {
-                if (it == null) {
-                    AppLog.d("CallController", "抓取协助页画面失败：帧转换失败")
+            if (buffer != null) {
+                return try {
+                    withContext(Dispatchers.Default) {
+                        i420BufferToBitmap(buffer)
+                    }.also {
+                        if (it == null) {
+                            AppLog.d("CallController", "抓取协助页画面失败：帧转换失败")
+                        }
+                    }
+                } finally {
+                    buffer.release()
                 }
             }
-        } finally {
-            buffer.release()
+            if (attempt == 9) {
+                AppLog.d("CallController", "抓取协助页画面失败：暂无缓存帧")
+            } else {
+                delay(100)
+            }
         }
+        return null
     }
 
     private val remoteFrameSink = VideoSink { frame ->
@@ -958,28 +977,7 @@ class CallController(
             return null
         }
         val jpegBytes = output.toByteArray()
-        val decodedBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return null
-        if (decodedBitmap.isRecycled) {
-            return null
-        }
-        val rotatedBitmap = runCatching {
-            Bitmap.createBitmap(
-                decodedBitmap,
-                0,
-                0,
-                decodedBitmap.width,
-                decodedBitmap.height,
-                Matrix().apply { postRotate(-90f) },
-                true
-            )
-        }.getOrNull()
-        if (rotatedBitmap == null) {
-            return decodedBitmap
-        }
-        if (rotatedBitmap !== decodedBitmap && !decodedBitmap.isRecycled) {
-            decodedBitmap.recycle()
-        }
-        return rotatedBitmap
+        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
     }
 
     private fun copyI420ToNv21(buffer: VideoFrame.I420Buffer, out: ByteArray, width: Int, height: Int) {
