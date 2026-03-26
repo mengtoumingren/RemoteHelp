@@ -3,7 +3,7 @@ package com.timemotion.remotehelp.core
 import android.content.Context
 import android.os.Environment
 import android.util.Log
-import com.timemotion.remotehelp.ui.UiFeedbackBus
+import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter

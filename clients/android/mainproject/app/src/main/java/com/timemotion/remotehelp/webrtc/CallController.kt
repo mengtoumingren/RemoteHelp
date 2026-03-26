@@ -4,19 +4,19 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.media.projection.MediaProjection
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.Camera2Enumerator
-import org.webrtc.CameraVideoCapturer
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
+import org.webrtc.CapturerObserver
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
@@ -30,13 +30,20 @@ import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SurfaceTextureHelper
+import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
+import org.webrtc.VideoFrame
+import org.webrtc.JavaI420Buffer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.remote.readDeviceScreenMetrics
-import com.timemotion.remotehelp.ui.UiFeedbackBus
+import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
+import kotlinx.coroutines.flow.StateFlow
 
 data class CallUiState(
     val serverUrl: String = "ws://10.0.2.2:3000/ws",
@@ -50,16 +57,9 @@ data class CallUiState(
     val isSpeakerOn: Boolean = true,
     val remotePeerName: String = "",
     val roomParticipantCount: Int = 0,
-    val localRenderer: VideoRendererBinding? = null,
-    val remoteRenderer: VideoRendererBinding? = null,
-    val assistRenderer: VideoRendererBinding? = null
-)
-
-data class VideoRendererBinding(
-    val eglBaseContext: EglBase.Context,
-    val mirror: Boolean,
-    val attach: (org.webrtc.VideoSink) -> Unit,
-    val detach: (org.webrtc.VideoSink) -> Unit
+    val localRenderer: SurfaceViewRenderer? = null,
+    val remoteRenderer: SurfaceViewRenderer? = null,
+    val assistRenderer: SurfaceViewRenderer? = null
 )
 
 class CallController(
@@ -107,6 +107,12 @@ class CallController(
     private var remoteVideoTrack: VideoTrack? = null
     private var remoteScreenTrack: VideoTrack? = null
     private var remoteAudioTrack: AudioTrack? = null
+    private var localRendererSurfaceView: SurfaceViewRenderer? = null
+    private var remoteRendererSurfaceView: SurfaceViewRenderer? = null
+    private var assistRendererSurfaceView: SurfaceViewRenderer? = null
+    private var localRendererAttached = false
+    private var remoteRendererAttached = false
+    private var assistRendererAttached = false
     private var remoteClientId: String? = null
     private var isMakingOffer = false
     private var isLocalCaptureStarted = false
@@ -129,7 +135,7 @@ class CallController(
             .setVideoEncoderFactory(HardwareVideoEncoderFactory(eglBase.eglBaseContext, true, true))
             .setVideoDecoderFactory(HardwareVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
-        publishRendererBindings()
+        publishRendererViews()
     }
 
     fun updateServerUrl(value: String) {
@@ -188,8 +194,14 @@ class CallController(
             ensureScreenShareTrack()
             attachLocalTracksToPeerConnection()
             configureAudioRoute()
-            publishRendererBindings()
-            setStatus("本地媒体已准备")
+            publishRendererViews()
+            setStatus(
+                if (capturer is SyntheticVideoCapturer) {
+                    "模拟器测试视频源已启动"
+                } else {
+                    "本地媒体已准备"
+                }
+            )
             requestRtcNegotiationIfReady()
         }.onFailure {
             AppLog.logThrowable("CallController", it, "启动本地媒体失败")
@@ -246,7 +258,7 @@ class CallController(
             status = "已挂断"
         )
         isRtcOfferAllowed = false
-        publishRendererBindings()
+        publishRendererViews()
     }
 
     fun toggleMic() {
@@ -365,6 +377,15 @@ class CallController(
         allowRtcReconnect = false
         cancelRtcReconnect()
         leaveRoom()
+        localRendererAttached = false
+        remoteRendererAttached = false
+        assistRendererAttached = false
+        listOfNotNull(localRendererSurfaceView, remoteRendererSurfaceView, assistRendererSurfaceView).forEach { surfaceView ->
+            runCatching { surfaceView.release() }
+        }
+        localRendererSurfaceView = null
+        remoteRendererSurfaceView = null
+        assistRendererSurfaceView = null
         stopLocalCapture()
         videoCapturer?.dispose()
         videoSource?.dispose()
@@ -449,22 +470,19 @@ class CallController(
                     override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
                         when (val track = receiver.track()) {
                             is VideoTrack -> {
+                                val trackId = track.id()
                                 val enabled = runCatching { track.enabled() }.getOrDefault(true)
-                                AppLog.d("CallController", "收到远端视频轨 id=${track.id()}, enabled=$enabled")
-                                val isScreenTrack = track.id() == LOCAL_SCREEN_TRACK_ID || !enabled
-                                val isCameraTrack = track.id() == LOCAL_CAMERA_TRACK_ID || enabled
-                                if (isScreenTrack && remoteScreenTrack == null) {
-                                    remoteScreenTrack = track
-                                } else if (isCameraTrack && remoteVideoTrack == null) {
-                                    remoteVideoTrack = track
-                                } else if (remoteVideoTrack == null) {
-                                    remoteVideoTrack = track
-                                } else {
-                                    remoteScreenTrack = track
+                                AppLog.d("CallController", "收到远端视频轨 id=$trackId, enabled=$enabled")
+                                when {
+                                    trackId == LOCAL_CAMERA_TRACK_ID -> remoteVideoTrack = track
+                                    trackId == LOCAL_SCREEN_TRACK_ID -> remoteScreenTrack = track
+                                    remoteVideoTrack == null -> remoteVideoTrack = track
+                                    remoteScreenTrack == null -> remoteScreenTrack = track
+                                    else -> remoteScreenTrack = track
                                 }
-                                publishRendererBindings()
+                                publishRendererViews()
                                 setStatus(
-                                    if (track.id() == LOCAL_SCREEN_TRACK_ID) {
+                                    if (trackId == LOCAL_SCREEN_TRACK_ID) {
                                         "已接入对方屏幕画面"
                                     } else {
                                         "已接入对方画面"
@@ -611,6 +629,8 @@ class CallController(
             cancelRtcReconnect()
             rtcReconnectAttempt = 0
         }
+        remoteRendererAttached = false
+        assistRendererAttached = false
         remoteVideoTrack = null
         remoteScreenTrack = null
         remoteAudioTrack = null
@@ -677,6 +697,10 @@ class CallController(
     }
 
     private fun disposeLocalCameraResources() {
+        localRendererSurfaceView?.let { surfaceView ->
+            runCatching { localVideoTrack?.removeSink(surfaceView) }
+        }
+        localRendererAttached = false
         localVideoSender?.setTrack(null, false)
         localVideoSender = null
         localVideoTrack?.dispose()
@@ -729,12 +753,14 @@ class CallController(
     private fun clearRemotePeerState() {
         cancelRtcReconnect()
         rtcReconnectAttempt = 0
+        remoteRendererAttached = false
+        assistRendererAttached = false
         remoteVideoTrack = null
         remoteScreenTrack = null
         remoteAudioTrack = null
         remoteClientId = null
         _uiState.value = _uiState.value.copy(remotePeerName = "")
-        publishRendererBindings()
+        publishRendererViews()
     }
 
     private fun canInitiateOffer(): Boolean =
@@ -753,55 +779,47 @@ class CallController(
         }
     }
 
-    private fun publishRendererBindings() {
-        val localBinding = localVideoTrack?.let { track ->
-            VideoRendererBinding(
-                eglBaseContext = eglBase.eglBaseContext,
-                mirror = true,
-                attach = { renderer ->
-                    if (renderer is org.webrtc.SurfaceViewRenderer) {
-                        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                    }
-                    track.addSink(renderer)
-                },
-                detach = { renderer -> track.removeSink(renderer) }
-            )
+    private fun publishRendererViews() {
+        val localSurfaceView = localRendererSurfaceView ?: createRendererSurface(true).also {
+            localRendererSurfaceView = it
         }
-        val remoteBinding = remoteVideoTrack?.let { track ->
-            VideoRendererBinding(
-                eglBaseContext = eglBase.eglBaseContext,
-                mirror = false,
-                attach = { renderer ->
-                    if (renderer is org.webrtc.SurfaceViewRenderer) {
-                        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                    }
-                    track.addSink(renderer)
-                },
-                detach = { renderer -> track.removeSink(renderer) }
-            )
+        val remoteSurfaceView = remoteRendererSurfaceView ?: createRendererSurface(false).also {
+            remoteRendererSurfaceView = it
         }
-        val assistBinding = remoteScreenTrack?.let { track ->
-            VideoRendererBinding(
-                eglBaseContext = eglBase.eglBaseContext,
-                mirror = false,
-                attach = { renderer ->
-                    if (renderer is org.webrtc.SurfaceViewRenderer) {
-                        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                    }
-                    track.addSink(renderer)
-                },
-                detach = { renderer -> track.removeSink(renderer) }
-            )
+        val assistSurfaceView = assistRendererSurfaceView ?: createRendererSurface(false).also {
+            assistRendererSurfaceView = it
+        }
+        if (localVideoTrack != null && !localRendererAttached) {
+            localVideoTrack?.addSink(localSurfaceView)
+            localRendererAttached = true
+        }
+        if (remoteVideoTrack != null && !remoteRendererAttached) {
+            remoteVideoTrack?.addSink(remoteSurfaceView)
+            remoteRendererAttached = true
+        }
+        if (remoteScreenTrack != null && !assistRendererAttached) {
+            remoteScreenTrack?.addSink(assistSurfaceView)
+            assistRendererAttached = true
         }
         AppLog.d(
             "CallController",
-            "刷新渲染绑定 local=${localBinding != null}, remote=${remoteBinding != null}, assist=${assistBinding != null}"
+            "刷新渲染视图 local=${localVideoTrack != null}, remote=${remoteVideoTrack != null}, assist=${remoteScreenTrack != null}"
         )
         _uiState.value = _uiState.value.copy(
-            localRenderer = localBinding,
-            remoteRenderer = remoteBinding,
-            assistRenderer = assistBinding
+            localRenderer = if (localVideoTrack != null) localSurfaceView else null,
+            remoteRenderer = if (remoteVideoTrack != null) remoteSurfaceView else null,
+            assistRenderer = if (remoteScreenTrack != null) assistSurfaceView else null
         )
+    }
+
+    private fun createRendererSurface(mirror: Boolean): SurfaceViewRenderer {
+        return SurfaceViewRenderer(context).apply {
+            init(eglBase.eglBaseContext, null)
+            setEnableHardwareScaler(true)
+            setMirror(mirror)
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
     }
 
     private fun attachLocalTracksToPeerConnection(connection: PeerConnection? = peerConnection) {
@@ -940,11 +958,44 @@ class CallController(
         }
     }
 
-    private fun createVideoCapturer(): CameraVideoCapturer? {
-        val enumerator = Camera2Enumerator(context)
-        val frontCamera = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
-        val cameraName = frontCamera ?: enumerator.deviceNames.firstOrNull()
-        return cameraName?.let { enumerator.createCapturer(it, null) }
+    private fun createVideoCapturer(): VideoCapturer? {
+        return runCatching {
+            val enumerator = Camera2Enumerator(context)
+            val frontCamera = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
+            val cameraName = frontCamera ?: enumerator.deviceNames.firstOrNull()
+            val cameraCapturer = cameraName?.let { enumerator.createCapturer(it, null) }
+            if (cameraCapturer != null) {
+                AppLog.d("CallController", "使用系统摄像头视频源: $cameraName")
+                cameraCapturer
+            } else if (isLikelyEmulator()) {
+                AppLog.d("CallController", "未找到可用摄像头，使用模拟器测试视频源")
+                SyntheticVideoCapturer()
+            } else {
+                null
+            }
+        }.getOrElse { error ->
+            AppLog.logThrowable("CallController", error, "创建视频采集器失败")
+            if (isLikelyEmulator()) {
+                AppLog.d("CallController", "摄像头创建失败，回退到模拟器测试视频源")
+                SyntheticVideoCapturer()
+            } else {
+                null
+            }
+        }
+    }
+
+    private fun isLikelyEmulator(): Boolean {
+        return Build.FINGERPRINT.startsWith("generic") ||
+            Build.FINGERPRINT.startsWith("unknown") ||
+            Build.MODEL.contains("google_sdk", ignoreCase = true) ||
+            Build.MODEL.contains("Emulator", ignoreCase = true) ||
+            Build.MODEL.contains("Android SDK built for", ignoreCase = true) ||
+            Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
+            Build.HARDWARE.contains("goldfish", ignoreCase = true) ||
+            Build.HARDWARE.contains("ranchu", ignoreCase = true) ||
+            Build.PRODUCT.contains("sdk", ignoreCase = true) ||
+            Build.PRODUCT.contains("emulator", ignoreCase = true) ||
+            Build.PRODUCT.contains("vbox", ignoreCase = true)
     }
 
     private fun setStatus(message: String) {
@@ -957,6 +1008,124 @@ private open class SimpleSdpObserver : SdpObserver {
     override fun onSetSuccess() = Unit
     override fun onCreateFailure(error: String) = Unit
     override fun onSetFailure(error: String) = Unit
+}
+
+private class SyntheticVideoCapturer : VideoCapturer {
+    private val executor = Executors.newSingleThreadScheduledExecutor()
+    private var capturerObserver: CapturerObserver? = null
+    private var frameFuture: ScheduledFuture<*>? = null
+    @Volatile
+    private var running = false
+    private var width = 640
+    private var height = 360
+    private var fps = 15
+    private var frameIndex = 0
+
+    override fun initialize(surfaceTextureHelper: SurfaceTextureHelper, context: Context, capturerObserver: CapturerObserver) {
+        this.capturerObserver = capturerObserver
+    }
+
+    override fun startCapture(width: Int, height: Int, framerate: Int) {
+        this.width = width.coerceAtLeast(2).ensureEven()
+        this.height = height.coerceAtLeast(2).ensureEven()
+        this.fps = framerate.coerceAtLeast(1)
+        if (running) {
+            restartFrames()
+            return
+        }
+        running = true
+        capturerObserver?.onCapturerStarted(true)
+        restartFrames()
+    }
+
+    override fun stopCapture() {
+        running = false
+        frameFuture?.cancel(true)
+        frameFuture = null
+        capturerObserver?.onCapturerStopped()
+    }
+
+    override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
+        this.width = width.coerceAtLeast(2).ensureEven()
+        this.height = height.coerceAtLeast(2).ensureEven()
+        this.fps = framerate.coerceAtLeast(1)
+        if (running) {
+            restartFrames()
+        }
+    }
+
+    override fun dispose() {
+        stopCapture()
+        executor.shutdownNow()
+        capturerObserver = null
+    }
+
+    override fun isScreencast(): Boolean = false
+
+    private fun restartFrames() {
+        frameFuture?.cancel(true)
+        val periodMs = (1000L / fps).coerceAtLeast(33L)
+        frameFuture = executor.scheduleAtFixedRate(
+            { produceFrame() },
+            0L,
+            periodMs,
+            TimeUnit.MILLISECONDS
+        )
+    }
+
+    private fun produceFrame() {
+        if (!running) {
+            return
+        }
+        val observer = capturerObserver ?: return
+        val buffer = JavaI420Buffer.allocate(width, height)
+        try {
+            fillPattern(buffer, frameIndex++)
+            val frame = VideoFrame(buffer, 0, System.nanoTime())
+            try {
+                observer.onFrameCaptured(frame)
+            } finally {
+                frame.release()
+            }
+        } catch (throwable: Throwable) {
+            AppLog.logThrowable("SyntheticVideoCapturer", throwable, "生成测试视频帧失败")
+        }
+    }
+
+    private fun fillPattern(buffer: JavaI420Buffer, frameIndex: Int) {
+        val yPlane = buffer.dataY
+        val uPlane = buffer.dataU
+        val vPlane = buffer.dataV
+        val yStride = buffer.strideY
+        val uStride = buffer.strideU
+        val vStride = buffer.strideV
+        val w = buffer.width
+        val h = buffer.height
+        for (row in 0 until h) {
+            for (col in 0 until w) {
+                val band = ((col + frameIndex * 6) / 80) % 6
+                val value = when (band) {
+                    0 -> 30 + ((row + frameIndex * 3) % 90)
+                    1 -> 80 + ((col + frameIndex * 4) % 120)
+                    2 -> 150 - ((row + col + frameIndex * 5) % 80)
+                    3 -> 180 - ((row + frameIndex * 2) % 90)
+                    4 -> 220 - ((col + frameIndex * 3) % 110)
+                    else -> 60 + ((row + col + frameIndex * 7) % 120)
+                }
+                yPlane.put(row * yStride + col, value.coerceIn(0, 255).toByte())
+            }
+        }
+        val chromaHeight = (h + 1) / 2
+        val chromaWidth = (w + 1) / 2
+        val uValue = (90 + (frameIndex * 2 % 70)).coerceIn(0, 255).toByte()
+        val vValue = (160 + (frameIndex * 3 % 60)).coerceIn(0, 255).toByte()
+        for (row in 0 until chromaHeight) {
+            for (col in 0 until chromaWidth) {
+                uPlane.put(row * uStride + col, uValue)
+                vPlane.put(row * vStride + col, vValue)
+            }
+        }
+    }
 }
 
 private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1

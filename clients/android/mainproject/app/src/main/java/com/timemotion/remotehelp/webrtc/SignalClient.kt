@@ -11,7 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import com.timemotion.remotehelp.core.AppLog
-import com.timemotion.remotehelp.ui.UiFeedbackBus
+import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 
 sealed interface SignalEvent {
     data object Connected : SignalEvent

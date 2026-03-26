@@ -74,5 +74,10 @@ data class RemoteHelpUiState(
     val history: List<SessionHistoryItem> = emptyList(),
     val currentScreen: AppScreen = AppScreen.DASHBOARD,
     val bannerMessage: String? = null,
-    val isSettingsVisible: Boolean = false
+    val isSettingsVisible: Boolean = false,
+    val helperLocationPermissionGranted: Boolean = false,
+    val helperLocationSummary: String? = null,
+    val helperLocationUpdatedAt: Long? = null
 )
+
+internal const val SIGNAL_HELPER_LOCATION = "helper_location"

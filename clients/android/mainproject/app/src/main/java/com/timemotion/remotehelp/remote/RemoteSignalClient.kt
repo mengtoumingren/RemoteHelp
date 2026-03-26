@@ -9,7 +9,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import com.timemotion.remotehelp.core.AppLog
-import com.timemotion.remotehelp.ui.UiFeedbackBus
+import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 
 sealed interface RemoteSignalEvent {
     data object Connected : RemoteSignalEvent

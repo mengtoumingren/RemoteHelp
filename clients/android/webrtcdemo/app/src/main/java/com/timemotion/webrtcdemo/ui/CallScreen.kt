@@ -254,7 +254,7 @@ private fun PlaceholderVideo(title: String) {
 private fun RendererView(renderer: VideoRendererBinding) {
     val context = LocalContext.current
     val surfaceView = remember {
-        SurfaceViewRenderer(context).apply {
+        SurfaceViewRenderer(context.applicationContext).apply {
             init(renderer.eglBaseContext, null)
             setEnableHardwareScaler(true)
             setMirror(renderer.mirror)

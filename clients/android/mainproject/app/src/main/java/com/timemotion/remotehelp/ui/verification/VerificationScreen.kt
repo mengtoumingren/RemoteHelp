@@ -2,7 +2,6 @@ package com.timemotion.remotehelp.ui.verification
 
 import android.graphics.Outline
 import android.view.View
-import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
@@ -33,7 +32,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,8 +50,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.core.HelpStage
+import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.webrtc.CallUiState
-import com.timemotion.remotehelp.webrtc.VideoRendererBinding
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -79,6 +77,12 @@ fun VerificationScreen(
     var acceptCooldownRemaining by remember(side, stage, uiState.remoteRenderer) { mutableStateOf(15) }
     var remoteVideoTimeoutRemaining by remember(side, stage, uiState.remoteRenderer) { mutableStateOf(5 * 60) }
     var showRemoteVideoTimeoutDialog by remember(side, uiState.remoteRenderer, stage) { mutableStateOf(false) }
+    val safeAcceptClick: () -> Unit = remember(onAcceptClick) {
+        {
+            runCatching { onAcceptClick() }
+                .onFailure { AppLog.logThrowable("VerificationScreen", it, "点击接受协助失败") }
+        }
+    }
     LaunchedEffect(side, stage, uiState.remoteRenderer) {
         if (side != DeviceSide.ELDER || stage != HelpStage.VERIFYING || uiState.remoteRenderer == null) {
             acceptCooldownRemaining = 15
@@ -224,8 +228,12 @@ fun VerificationScreen(
                             },
                             color = Color(0xFF526277)
                         )
+                        Text(
+                            text = "说明：点击“接受协助”即表示你同意协助过程中定时采集前摄画面、定位等信息，且这些数据仅保存在本机本地，不会离开本地设备。",
+                            color = Color(0xFF526277)
+                        )
                         Button(
-                            onClick = onAcceptClick,
+                            onClick = safeAcceptClick,
                             enabled = uiState.remoteRenderer != null && acceptCooldownRemaining == 0,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp)
@@ -290,7 +298,7 @@ private data class OverlayHintLine(
 
 @Composable
 private fun VerificationControlPanel(
-    localRenderer: VideoRendererBinding?,
+    localRenderer: SurfaceViewRenderer?,
     isMicEnabled: Boolean,
     isCameraEnabled: Boolean,
     isSpeakerOn: Boolean,
@@ -424,7 +432,7 @@ private fun VerificationInfoOverlay(
 
 @Composable
 private fun SmallPreviewPanel(
-    renderer: VideoRendererBinding?,
+    renderer: SurfaceViewRenderer?,
     placeholder: String,
     modifier: Modifier
 ) {
@@ -452,7 +460,7 @@ private fun SmallPreviewPanel(
 
 @Composable
 private fun RendererPanel(
-    renderer: VideoRendererBinding?,
+    renderer: SurfaceViewRenderer?,
     placeholder: String,
     modifier: Modifier
 ) {
@@ -479,7 +487,7 @@ private fun RendererPanel(
 
 @Composable
 private fun RendererView(
-    renderer: VideoRendererBinding,
+    renderer: SurfaceViewRenderer,
     modifier: Modifier,
     overlay: Boolean,
     cornerRadius: Dp
@@ -493,23 +501,17 @@ private fun RendererView(
             }
         }
     }
-    val surfaceView = remember {
-        SurfaceViewRenderer(context).apply {
-            init(renderer.eglBaseContext, null)
-            setEnableHardwareScaler(true)
-            setMirror(renderer.mirror)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-            setZOrderMediaOverlay(overlay)
-            setZOrderOnTop(overlay)
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            clipToOutline = true
-            this.outlineProvider = outlineProvider
-        }
+    val surfaceView = remember(renderer) {
+        renderer
     }
-
-    DisposableEffect(renderer) {
-        renderer.attach(surfaceView)
-        onDispose { renderer.detach(surfaceView) }
+    surfaceView.apply {
+        setEnableHardwareScaler(true)
+        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        setZOrderMediaOverlay(overlay)
+        setZOrderOnTop(overlay)
+        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        clipToOutline = true
+        this.outlineProvider = outlineProvider
     }
 
     Box(
@@ -523,14 +525,15 @@ private fun RendererView(
                     clipToOutline = true
                     this.outlineProvider = outlineProvider
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    (surfaceView.parent as? ViewGroup)?.removeView(surfaceView)
-                    addView(
-                        surfaceView,
-                        FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT
+                    if (surfaceView.parent == null) {
+                        addView(
+                            surfaceView,
+                            FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                                FrameLayout.LayoutParams.MATCH_PARENT
+                            )
                         )
-                    )
+                    }
                 }
             },
             modifier = Modifier
@@ -539,9 +542,7 @@ private fun RendererView(
             update = {
                 it.clipToOutline = true
                 it.outlineProvider = outlineProvider
-                if (surfaceView.parent !== it) {
-                    (surfaceView.parent as? ViewGroup)?.removeView(surfaceView)
-                    it.removeAllViews()
+                if (surfaceView.parent == null) {
                     it.addView(
                         surfaceView,
                         FrameLayout.LayoutParams(
@@ -552,7 +553,6 @@ private fun RendererView(
                 }
                 surfaceView.clipToOutline = true
                 surfaceView.outlineProvider = outlineProvider
-                surfaceView.setMirror(renderer.mirror)
             }
         )
     }

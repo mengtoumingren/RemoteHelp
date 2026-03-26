@@ -50,10 +50,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -62,9 +62,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
-import com.timemotion.remotehelp.webrtc.VideoRendererBinding
 import android.widget.FrameLayout
-import android.view.ViewGroup
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
@@ -74,10 +72,12 @@ fun RemoteAssistScreen(
     helperName: String,
     elderName: String,
     uiState: RemoteControlUiState,
-    screenRenderer: VideoRendererBinding?,
+    screenRenderer: SurfaceViewRenderer?,
     onEndClick: () -> Unit,
     onRequestCapture: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    overlayPermissionGranted: Boolean,
+    onOpenOverlaySettings: () -> Unit,
     onConnectClick: () -> Unit,
     isSpeakerOn: Boolean,
     onToggleSpeaker: () -> Unit,
@@ -89,7 +89,7 @@ fun RemoteAssistScreen(
     onSendEnter: () -> Unit,
     onSendBack: () -> Unit,
     onSendHome: () -> Unit,
-    onSendRecents: () -> Unit
+    onSendRecents: () -> Unit,
 ) {
     val screenAspectRatio = if (uiState.targetStatus.screenWidth > 0 && uiState.targetStatus.screenHeight > 0) {
         uiState.targetStatus.screenWidth.toFloat() / uiState.targetStatus.screenHeight.toFloat()
@@ -139,14 +139,17 @@ fun RemoteAssistScreen(
                         onFrameSwipe = onFrameSwipe,
                         onFrameDrag = onFrameDrag
                     )
-                    AssistTopOverlay(
-                        title = "正在协助：$elderName",
-                        subtitle = uiState.targetStatus.message,
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.TopStart)
                             .zIndex(1f)
-                    )
+                    ) {
+                        AssistTopOverlay(
+                            title = "正在协助：$elderName",
+                            subtitle = uiState.targetStatus.message
+                        )
+                    }
                 }
             }
         } else {
@@ -170,8 +173,10 @@ fun RemoteAssistScreen(
                     targetStatus = uiState.targetStatus.message,
                     captureActive = uiState.targetStatus.captureActive,
                     accessibilityEnabled = uiState.targetStatus.accessibilityEnabled,
+                    overlayPermissionGranted = overlayPermissionGranted,
                     onRequestCapture = onRequestCapture,
                     onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                    onOpenOverlaySettings = onOpenOverlaySettings,
                     isConnected = uiState.isConnected,
                     onConnectClick = onConnectClick,
                     onEndClick = onEndClick
@@ -184,7 +189,7 @@ fun RemoteAssistScreen(
 @Composable
 private fun HelperAssistBody(
     modifier: Modifier,
-    screenRenderer: VideoRendererBinding?,
+    screenRenderer: SurfaceViewRenderer?,
     screenAspectRatio: Float,
     onFrameTap: (Float, Float) -> Unit,
     onFrameSwipe: (Float, Float, Float, Float) -> Unit,
@@ -229,27 +234,77 @@ private fun AssistTopOverlay(
 ) {
     Box(
         modifier = modifier
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(Color(0xCC07111C), Color(0x7007111C), Color.Transparent)
-                )
-            )
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,
                 color = Color.White,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = subtitle,
                 color = Color(0xFFD6E1EA),
+                fontSize = 10.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+    }
+}
+
+@Composable
+private fun AssistEvidenceBanner(
+    notice: String,
+    locationPermissionGranted: Boolean,
+    onRequestLocationPermission: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xD0141E2A))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(0.72f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "定时留痕",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = notice,
+                    color = Color(0xFFD6E1EA),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (!locationPermissionGranted && onRequestLocationPermission != null) {
+                OutlinedButton(
+                    onClick = onRequestLocationPermission,
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("开启定位")
+                }
+            }
         }
     }
 }
@@ -458,8 +513,10 @@ private fun ElderAssistBody(
     targetStatus: String,
     captureActive: Boolean,
     accessibilityEnabled: Boolean,
+    overlayPermissionGranted: Boolean,
     onRequestCapture: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
     isConnected: Boolean,
     onConnectClick: () -> Unit,
     onEndClick: () -> Unit
@@ -497,6 +554,17 @@ private fun ElderAssistBody(
             },
             buttonText = if (accessibilityEnabled) "前往设置" else "开启无障碍服务",
             onClick = onOpenAccessibilitySettings
+        )
+        PermissionStatusCard(
+            title = "协助悬浮窗",
+            status = if (overlayPermissionGranted) "已开启" else "未开启",
+            description = if (overlayPermissionGranted) {
+                "悬浮窗权限已具备，点击按钮后才会显示协助者实时视频的小悬浮窗，不会自动弹出。"
+            } else {
+                "点击去授权后才会打开系统悬浮窗设置页，授权后会显示协助者实时视频的小悬浮窗。"
+            },
+            buttonText = if (overlayPermissionGranted) "显示悬浮窗" else "去授权",
+            onClick = onOpenOverlaySettings
         )
         CardBlock {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -600,7 +668,7 @@ private fun calculateContentRect(size: IntSize, aspectRatio: Float): ContentRect
 
 @Composable
 private fun ControlRendererPanel(
-    renderer: VideoRendererBinding?,
+    renderer: SurfaceViewRenderer?,
     placeholder: String,
     aspectRatio: Float,
     modifier: Modifier,
@@ -618,27 +686,20 @@ private fun ControlRendererPanel(
         }
         return
     }
-    val context = LocalContext.current
-    val surfaceView = remember {
-        SurfaceViewRenderer(context).apply {
-            init(renderer.eglBaseContext, null)
-            setEnableHardwareScaler(true)
-            setMirror(renderer.mirror)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-            setZOrderMediaOverlay(true)
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        }
+    val surfaceView = remember(renderer) {
+        renderer
+    }
+    surfaceView.apply {
+        setEnableHardwareScaler(true)
+        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        setZOrderMediaOverlay(true)
+        setBackgroundColor(android.graphics.Color.TRANSPARENT)
     }
     var size by remember { mutableStateOf(IntSize.Zero) }
     var dragStart by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var dragEnd by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var swipeStart by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var swipeEnd by remember { mutableStateOf<Pair<Float, Float>?>(null) }
-
-    DisposableEffect(renderer) {
-        renderer.attach(surfaceView)
-        onDispose { renderer.detach(surfaceView) }
-    }
 
     Box(
         modifier = modifier
@@ -649,14 +710,15 @@ private fun ControlRendererPanel(
             factory = {
                 FrameLayout(it).apply {
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    (surfaceView.parent as? ViewGroup)?.removeView(surfaceView)
-                    addView(
-                        surfaceView,
-                        FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT
+                    if (surfaceView.parent == null) {
+                        addView(
+                            surfaceView,
+                            FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                                FrameLayout.LayoutParams.MATCH_PARENT
+                            )
                         )
-                    )
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
