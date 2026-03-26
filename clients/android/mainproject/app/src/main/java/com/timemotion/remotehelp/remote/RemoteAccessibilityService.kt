@@ -130,7 +130,7 @@ class RemoteAccessibilityService : AccessibilityService() {
                     if (text.isEmpty()) {
                         false
                     } else {
-                        pasteTextIntoFocusedNode(text)
+                        inputTextIntoBestNode(text)
                     }
                 }
 
@@ -182,18 +182,7 @@ class RemoteAccessibilityService : AccessibilityService() {
     }
 
     private fun pasteTextIntoFocusedNode(text: String): Boolean {
-        val node = prepareEditableNode() ?: return false
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
-        val clip = ClipData.newPlainText("remote_help_text", text)
-        clipboard.setPrimaryClip(clip)
-        val pasteSuccess = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-        if (pasteSuccess) {
-            return true
-        }
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-        }
-        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        return inputTextIntoBestNode(text)
     }
 
     private fun deletePreviousCharacter(): Boolean {
@@ -272,22 +261,111 @@ class RemoteAccessibilityService : AccessibilityService() {
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
+    private fun inputTextIntoBestNode(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val candidates = buildList {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?.takeIf { supportsTextInput(it) }
+                ?.let { add(it) }
+            findBestTextInputNode(root)
+                ?.let { add(it) }
+        }.distinctBy { System.identityHashCode(it) }
+
+        for (candidate in candidates) {
+            if (!prepareNodeForInput(candidate)) {
+                continue
+            }
+            if (injectTextIntoNode(candidate, text)) {
+                return true
+            }
+        }
+        AppLog.d(
+            TAG,
+            "文本注入失败 textLength=${text.length} candidateCount=${candidates.size}"
+        )
+        return false
+    }
+
+    private fun injectTextIntoNode(node: AccessibilityNodeInfo, text: String): Boolean {
+        val currentText = node.text?.toString().orEmpty()
+        if (currentText.isEmpty()) {
+            val setTextArgs = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setTextArgs)) {
+                return true
+            }
+        }
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+        clipboard.setPrimaryClip(ClipData.newPlainText("remote_help_text", text))
+        if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+            return true
+        }
+        if (currentText.isEmpty()) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+        AppLog.d(
+            TAG,
+            "文本粘贴失败 node=${node.className} textLength=${text.length}"
+        )
+        return false
+    }
+
     private fun prepareEditableNode(): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
         root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?.takeIf { it.isEditable }
+            ?.takeIf { supportsTextInput(it) }
             ?.let { return it }
-        val editable = findFirstEditableNode(root) ?: return null
-        if (editable.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) {
-            editable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        }
-        if (!editable.isFocused) {
-            editable.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        }
-        if (!editable.isAccessibilityFocused) {
-            editable.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
-        }
+        val editable = findBestTextInputNode(root) ?: return null
+        prepareNodeForInput(editable)
         return editable
+    }
+
+    private fun prepareNodeForInput(node: AccessibilityNodeInfo): Boolean {
+        var success = false
+        if (node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) {
+            success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK) || success
+        }
+        if (!node.isFocused) {
+            success = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) || success
+        }
+        if (!node.isAccessibilityFocused) {
+            success = node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) || success
+        }
+        val showOnScreenActionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
+        if (node.actionList.any { it.id == showOnScreenActionId }) {
+            success = node.performAction(showOnScreenActionId) || success
+        }
+        return success || node.isFocused || node.isAccessibilityFocused || supportsTextInput(node)
+    }
+
+    private fun supportsTextInput(node: AccessibilityNodeInfo): Boolean {
+        if (node.isEditable) {
+            return true
+        }
+        return node.actionList.any { action ->
+            action.id == AccessibilityNodeInfo.ACTION_SET_TEXT ||
+                action.id == AccessibilityNodeInfo.ACTION_PASTE
+        }
+    }
+
+    private fun findBestTextInputNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null || !node.isVisibleToUser) {
+            return null
+        }
+        if (supportsTextInput(node)) {
+            return node
+        }
+        for (index in node.childCount - 1 downTo 0) {
+            val match = findBestTextInputNode(node.getChild(index))
+            if (match != null) {
+                return match
+            }
+        }
+        return null
     }
 
     fun isSoftKeyboardHidden(): Boolean {
@@ -332,22 +410,6 @@ class RemoteAccessibilityService : AccessibilityService() {
             }
         }
         return node.takeIf { it.isEditable }
-    }
-
-    private fun findFirstEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (node == null || !node.isVisibleToUser) {
-            return null
-        }
-        if (node.isEditable) {
-            return node
-        }
-        for (index in node.childCount - 1 downTo 0) {
-            val match = findFirstEditableNode(node.getChild(index))
-            if (match != null) {
-                return match
-            }
-        }
-        return null
     }
 
     companion object {
