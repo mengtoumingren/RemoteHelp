@@ -76,8 +76,8 @@ class HelperVideoOverlayManager(private val appContext: Context) {
         root.addView(
             surfaceView,
             FrameLayout.LayoutParams(
-                dp(88),
-                dp(132)
+                dp(58),
+                dp(88)
             )
         )
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -97,8 +97,8 @@ class HelperVideoOverlayManager(private val appContext: Context) {
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.END
-            x = dp(8)
-            y = dp(8)
+            x = dp(6)
+            y = dp(6)
         }
         windowManager.addView(root, params)
         overlayView = root
