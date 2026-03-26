@@ -2,6 +2,11 @@ package com.timemotion.remotehelp.webrtc
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.media.AudioManager
 import android.media.projection.MediaProjection
 import android.os.Build
@@ -9,6 +14,8 @@ import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 import org.webrtc.AudioSource
@@ -31,11 +38,13 @@ import org.webrtc.SessionDescription
 import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoSink
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoFrame
 import org.webrtc.JavaI420Buffer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -113,6 +122,9 @@ class CallController(
     private var localRendererAttached = false
     private var remoteRendererAttached = false
     private var assistRendererAttached = false
+    private var remoteFrameSinkTrack: VideoTrack? = null
+    private val remoteFrameSinkLock = Any()
+    private var remoteFrameBuffer: VideoFrame.I420Buffer? = null
     private var remoteClientId: String? = null
     private var isMakingOffer = false
     private var isLocalCaptureStarted = false
@@ -380,6 +392,12 @@ class CallController(
         localRendererAttached = false
         remoteRendererAttached = false
         assistRendererAttached = false
+        remoteFrameSinkTrack?.removeSink(remoteFrameSink)
+        remoteFrameSinkTrack = null
+        synchronized(remoteFrameSinkLock) {
+            remoteFrameBuffer?.release()
+            remoteFrameBuffer = null
+        }
         listOfNotNull(localRendererSurfaceView, remoteRendererSurfaceView, assistRendererSurfaceView).forEach { surfaceView ->
             runCatching { surfaceView.release() }
         }
@@ -631,6 +649,12 @@ class CallController(
         }
         remoteRendererAttached = false
         assistRendererAttached = false
+        remoteFrameSinkTrack?.removeSink(remoteFrameSink)
+        remoteFrameSinkTrack = null
+        synchronized(remoteFrameSinkLock) {
+            remoteFrameBuffer?.release()
+            remoteFrameBuffer = null
+        }
         remoteVideoTrack = null
         remoteScreenTrack = null
         remoteAudioTrack = null
@@ -755,6 +779,12 @@ class CallController(
         rtcReconnectAttempt = 0
         remoteRendererAttached = false
         assistRendererAttached = false
+        remoteFrameSinkTrack?.removeSink(remoteFrameSink)
+        remoteFrameSinkTrack = null
+        synchronized(remoteFrameSinkLock) {
+            remoteFrameBuffer?.release()
+            remoteFrameBuffer = null
+        }
         remoteVideoTrack = null
         remoteScreenTrack = null
         remoteAudioTrack = null
@@ -797,6 +827,11 @@ class CallController(
             remoteVideoTrack?.addSink(remoteSurfaceView)
             remoteRendererAttached = true
         }
+        if (remoteVideoTrack != null && remoteFrameSinkTrack !== remoteVideoTrack) {
+            remoteFrameSinkTrack?.removeSink(remoteFrameSink)
+            remoteVideoTrack?.addSink(remoteFrameSink)
+            remoteFrameSinkTrack = remoteVideoTrack
+        }
         if (remoteScreenTrack != null && !assistRendererAttached) {
             remoteScreenTrack?.addSink(assistSurfaceView)
             assistRendererAttached = true
@@ -812,6 +847,36 @@ class CallController(
         )
     }
 
+    suspend fun captureRemoteVideoBitmap(): Bitmap? {
+        val buffer = synchronized(remoteFrameSinkLock) {
+            val current = remoteFrameBuffer ?: run {
+                AppLog.d("CallController", "抓取协助者画面失败：暂无缓存帧")
+                return null
+            }
+            current.retain()
+            current
+        }
+        return try {
+            withContext(Dispatchers.Default) {
+                i420BufferToBitmap(buffer)
+            }.also {
+                if (it == null) {
+                    AppLog.d("CallController", "抓取协助者画面失败：帧转换失败")
+                }
+            }
+        } finally {
+            buffer.release()
+        }
+    }
+
+    private val remoteFrameSink = VideoSink { frame ->
+        val i420Buffer = frame.buffer.toI420()
+        synchronized(remoteFrameSinkLock) {
+            remoteFrameBuffer?.release()
+            remoteFrameBuffer = i420Buffer
+        }
+    }
+
     private fun createRendererSurface(mirror: Boolean): SurfaceViewRenderer {
         return SurfaceViewRenderer(context).apply {
             init(eglBase.eglBaseContext, null)
@@ -819,6 +884,49 @@ class CallController(
             setMirror(mirror)
             setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+    }
+
+    private fun i420BufferToBitmap(buffer: VideoFrame.I420Buffer): Bitmap? {
+        val width = buffer.width
+        val height = buffer.height
+        if (width <= 0 || height <= 0) {
+            return null
+        }
+        val nv21 = ByteArray(width * height * 3 / 2)
+        copyI420ToNv21(buffer, nv21, width, height)
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val output = ByteArrayOutputStream()
+        if (!yuvImage.compressToJpeg(Rect(0, 0, width, height), 90, output)) {
+            return null
+        }
+        val jpegBytes = output.toByteArray()
+        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+    }
+
+    private fun copyI420ToNv21(buffer: VideoFrame.I420Buffer, out: ByteArray, width: Int, height: Int) {
+        val yPlane = buffer.dataY
+        val uPlane = buffer.dataU
+        val vPlane = buffer.dataV
+        val yStride = buffer.strideY
+        val uStride = buffer.strideU
+        val vStride = buffer.strideV
+        var outIndex = 0
+        for (row in 0 until height) {
+            val yRowOffset = row * yStride
+            for (col in 0 until width) {
+                out[outIndex++] = yPlane.get(yRowOffset + col)
+            }
+        }
+        val chromaHeight = height / 2
+        val chromaWidth = width / 2
+        for (row in 0 until chromaHeight) {
+            val uRowOffset = row * uStride
+            val vRowOffset = row * vStride
+            for (col in 0 until chromaWidth) {
+                out[outIndex++] = vPlane.get(vRowOffset + col)
+                out[outIndex++] = uPlane.get(uRowOffset + col)
+            }
         }
     }
 

@@ -6,7 +6,6 @@ import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
 import android.view.View
-import org.webrtc.SurfaceViewRenderer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,7 +36,7 @@ fun SecurityEvidenceCaptureHost(
     locationPermissionGranted: Boolean,
     helperLocationSummary: String?,
     helperLocationUpdatedAt: Long?,
-    helperVideoRenderer: SurfaceViewRenderer?,
+    captureHelperCameraBitmap: suspend () -> Bitmap?,
     onCaptureSaved: (SecurityEvidenceRecord) -> Unit
 ) {
     val context = LocalContext.current
@@ -51,14 +50,14 @@ fun SecurityEvidenceCaptureHost(
     val latestLocationPermissionGranted by rememberUpdatedState(locationPermissionGranted)
     val latestHelperLocationSummary by rememberUpdatedState(helperLocationSummary)
     val latestHelperLocationUpdatedAt by rememberUpdatedState(helperLocationUpdatedAt)
-    val latestHelperVideoRenderer by rememberUpdatedState(helperVideoRenderer)
+    val latestCaptureHelperCameraBitmap by rememberUpdatedState(captureHelperCameraBitmap)
     val latestOnCaptureSaved by rememberUpdatedState(onCaptureSaved)
 
     LaunchedEffect(enabled, sessionId) {
         if (!enabled || latestSessionId.isNullOrBlank()) {
             return@LaunchedEffect
         }
-        delay(INITIAL_CAPTURE_DELAY_MS)
+        delay(FIRST_CAPTURE_DELAY_MS)
         while (isActive && enabled && !latestSessionId.isNullOrBlank()) {
             runCatching {
                 captureAndStoreEvidence(
@@ -73,7 +72,7 @@ fun SecurityEvidenceCaptureHost(
                     locationPermissionGranted = latestLocationPermissionGranted,
                     helperLocationSummary = latestHelperLocationSummary,
                     helperLocationUpdatedAt = latestHelperLocationUpdatedAt,
-                    helperVideoRenderer = latestHelperVideoRenderer
+                    captureHelperCameraBitmap = latestCaptureHelperCameraBitmap
                 ).also { record ->
                     latestOnCaptureSaved(record)
                 }
@@ -97,13 +96,12 @@ private suspend fun captureAndStoreEvidence(
     locationPermissionGranted: Boolean,
     helperLocationSummary: String?,
     helperLocationUpdatedAt: Long?,
-    helperVideoRenderer: SurfaceViewRenderer?
+    captureHelperCameraBitmap: suspend () -> Bitmap?
 ): SecurityEvidenceRecord {
     val activity = context.findActivity() ?: throw IllegalStateException("未找到 Activity，无法采集截图")
     val width = view.width.takeIf { it > 0 } ?: throw IllegalStateException("当前窗口宽度无效")
     val height = view.height.takeIf { it > 0 } ?: throw IllegalStateException("当前窗口高度无效")
-    val helperRenderer = helperVideoRenderer ?: throw IllegalStateException("未找到协助方视频视图，无法采集证据")
-    val helperBitmap = captureRendererBitmap(helperRenderer) ?: throw IllegalStateException("协助方视频截图失败")
+    val helperBitmap = captureHelperCameraBitmap() ?: throw IllegalStateException("协助方视频截图失败")
     val screenBitmap = captureWindowBitmap(activity, width, height) ?: throw IllegalStateException("窗口截图失败")
     val timestamp = System.currentTimeMillis()
     val record = SecurityEvidenceRecord(
@@ -135,32 +133,6 @@ private suspend fun captureAndStoreEvidence(
     return persistedRecord
 }
 
-private suspend fun captureRendererBitmap(renderer: SurfaceViewRenderer): Bitmap? {
-    val width = renderer.width.takeIf { it > 0 } ?: return null
-    val height = renderer.height.takeIf { it > 0 } ?: return null
-    val surface = renderer.holder.surface
-    if (!surface.isValid) {
-        return null
-    }
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    return suspendCancellableCoroutine { continuation ->
-        val handler = Handler(Looper.getMainLooper())
-        PixelCopy.request(surface, bitmap, { result ->
-            if (result == PixelCopy.SUCCESS) {
-                continuation.resume(bitmap)
-            } else {
-                bitmap.recycle()
-                continuation.resume(null)
-            }
-        }, handler)
-        continuation.invokeOnCancellation {
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
-        }
-    }
-}
-
 private suspend fun captureWindowBitmap(activity: Activity, width: Int, height: Int): Bitmap? {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     return suspendCancellableCoroutine { continuation ->
@@ -181,5 +153,5 @@ private suspend fun captureWindowBitmap(activity: Activity, width: Int, height: 
     }
 }
 
-private const val INITIAL_CAPTURE_DELAY_MS = 3_000L
+private const val FIRST_CAPTURE_DELAY_MS = 0L
 private const val CAPTURE_INTERVAL_MS = 10_000L

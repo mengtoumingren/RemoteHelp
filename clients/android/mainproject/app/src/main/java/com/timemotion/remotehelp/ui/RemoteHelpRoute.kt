@@ -36,8 +36,7 @@ fun RemoteHelpRoute(
     val shouldCaptureSecurityEvidence =
         uiState.side == DeviceSide.ELDER &&
             uiState.activeSession?.verificationAcceptedAt != null &&
-            uiState.currentScreen in setOf(AppScreen.VERIFICATION, AppScreen.ASSIST) &&
-            callState.remoteRenderer != null
+            uiState.currentScreen in setOf(AppScreen.VERIFICATION, AppScreen.ASSIST)
 
     UiFeedbackHost()
     SecurityEvidenceCaptureHost(
@@ -50,7 +49,7 @@ fun RemoteHelpRoute(
         locationPermissionGranted = uiState.helperLocationPermissionGranted,
         helperLocationSummary = uiState.helperLocationSummary,
         helperLocationUpdatedAt = uiState.helperLocationUpdatedAt,
-        helperVideoRenderer = callState.remoteRenderer,
+        captureHelperCameraBitmap = { coordinator.callController.captureRemoteVideoBitmap() },
         onCaptureSaved = { }
     )
     HelperLocationSignalHost(
