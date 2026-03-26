@@ -28,7 +28,7 @@ fun VerificationRequestDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "协助过程中会定时采集前摄画面、定位等信息，作为被协助端本地留痕。点击“接受”即表示同意；随后会申请定位权限，若不授权定位，将视为不接受本次视频认证。",
+                    "协助过程中会每 10 秒采集一次前摄画面、定位和当前屏幕画面，作为被协助端本地留痕。点击“接受”即表示同意；随后会申请定位权限，若不授权定位，将视为不接受本次视频认证。",
                     color = Color(0xFF526277)
                 )
                 InfoLine("协助对象", "${session.elderName} · ${session.elderPhone}")

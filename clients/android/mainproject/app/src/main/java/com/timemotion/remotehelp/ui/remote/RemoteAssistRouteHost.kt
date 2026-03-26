@@ -28,7 +28,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -38,16 +37,12 @@ import com.timemotion.remotehelp.core.AppScreen
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.core.RemoteHelpCoordinator
 import com.timemotion.remotehelp.core.RemoteHelpUiState
-import com.timemotion.remotehelp.core.readLatestLocationSnapshot
 import com.timemotion.remotehelp.core.shouldShowAssistPermissionPrompt
 import com.timemotion.remotehelp.core.shouldListenForAssistExit
-import com.timemotion.remotehelp.core.SIGNAL_HELPER_LOCATION
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.webrtc.CallUiState
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
-import org.json.JSONObject
 
 @Composable
 fun RemoteAssistRouteHost(
@@ -62,21 +57,13 @@ fun RemoteAssistRouteHost(
     val latestUiState by rememberUpdatedState(uiState)
     val latestRemoteState by rememberUpdatedState(remoteState)
     var notificationPermissionGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) }
-    var locationPermissionGranted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        )
-    }
     var overlayPermissionGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var assistPermissionPromptVisible by remember { mutableStateOf(false) }
     var assistPermissionPromptSessionId by remember { mutableStateOf<String?>(null) }
     var openAccessibilitySettingsAfterCaptureSessionId by remember { mutableStateOf<String?>(null) }
     var elderControllerSeenSessionId by remember { mutableStateOf<String?>(null) }
     var elderControllerExitHandledSessionId by remember { mutableStateOf<String?>(null) }
-    var evidenceCaptureSessionId by remember { mutableStateOf<String?>(null) }
     var assistPermissionPromptSuppressedSessionId by remember { mutableStateOf<String?>(null) }
-    var assistEvidenceCaptureEnabled by remember { mutableStateOf(false) }
 
     val projectionLauncher = rememberLauncherForActivityResult(StartActivityForResult()) { result: ActivityResult ->
         runCatching {
@@ -132,9 +119,6 @@ fun RemoteAssistRouteHost(
     }
 
     LaunchedEffect(uiState.currentScreen, uiState.side) {
-        locationPermissionGranted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
         overlayPermissionGranted = Settings.canDrawOverlays(context)
     }
 
@@ -252,94 +236,6 @@ fun RemoteAssistRouteHost(
             runCatching { coordinator.onControllerLeftAssist() }
                 .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "处理协助方退出失败") }
         }
-    }
-
-    LaunchedEffect(
-        uiState.currentScreen,
-        uiState.side,
-        assistSessionId
-    ) {
-        if (
-            uiState.side != DeviceSide.HELPER ||
-            uiState.currentScreen != AppScreen.ASSIST ||
-            assistSessionId == null
-        ) {
-            return@LaunchedEffect
-        }
-        delay(1500L)
-        while (
-            latestUiState.side == DeviceSide.HELPER &&
-            latestUiState.currentScreen == AppScreen.ASSIST &&
-            latestUiState.activeSession?.requestId == assistSessionId &&
-            latestRemoteState.isConnected
-        ) {
-            val locationSummary = runCatching {
-                if (locationPermissionGranted) {
-                    context.readLatestLocationSnapshot()?.toSummary()
-                        ?: "已授权定位，但当前无可用位置"
-                } else {
-                    null
-                }
-            }.getOrElse {
-                AppLog.logThrowable("RemoteHelpApp", it, "读取协助方定位失败")
-                null
-            }
-            val payload = JSONObject()
-                .put("requestId", assistSessionId)
-                .put("capturedAt", System.currentTimeMillis())
-                .put("locationPermissionGranted", locationPermissionGranted)
-                .put("locationSummary", locationSummary)
-            runCatching {
-                coordinator.callController.sendAppSignal(SIGNAL_HELPER_LOCATION, payload)
-            }.onFailure {
-                AppLog.logThrowable("RemoteHelpApp", it, "上报协助方定位失败")
-            }
-            delay(30_000L)
-        }
-    }
-
-    LaunchedEffect(
-        uiState.currentScreen,
-        uiState.side,
-        assistSessionId
-    ) {
-        val sessionId = uiState.activeSession?.requestId
-        if (
-            uiState.currentScreen == AppScreen.ASSIST &&
-            uiState.side == DeviceSide.ELDER &&
-            sessionId != null
-        ) {
-            if (evidenceCaptureSessionId != sessionId) {
-                evidenceCaptureSessionId = sessionId
-            }
-            assistEvidenceCaptureEnabled = false
-            delay(2500L)
-            if (
-                latestUiState.currentScreen == AppScreen.ASSIST &&
-                latestUiState.side == DeviceSide.ELDER &&
-                latestUiState.activeSession?.requestId == sessionId
-            ) {
-                assistEvidenceCaptureEnabled = true
-            }
-        } else {
-            evidenceCaptureSessionId = null
-            assistEvidenceCaptureEnabled = false
-        }
-    }
-
-    if (uiState.side == DeviceSide.ELDER && assistSessionId != null) {
-        SecurityEvidenceCaptureHost(
-            enabled = assistEvidenceCaptureEnabled && uiState.currentScreen == AppScreen.ASSIST && remoteState.isConnected,
-            sessionId = assistSessionId,
-            helperName = uiState.activeSession?.helperName ?: uiState.helperName,
-            elderName = uiState.activeSession?.elderName ?: uiState.elderName,
-            callStatus = remoteState.status,
-            remoteState = remoteState,
-            locationPermissionGranted = uiState.helperLocationPermissionGranted,
-            helperLocationSummary = uiState.helperLocationSummary,
-            helperLocationUpdatedAt = uiState.helperLocationUpdatedAt,
-            onCaptureSaved = { }
-        )
     }
 
     if (assistPermissionPromptVisible && assistSessionId != null) {

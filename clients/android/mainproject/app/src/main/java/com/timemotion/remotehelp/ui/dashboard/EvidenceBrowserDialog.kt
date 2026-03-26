@@ -212,6 +212,10 @@ fun EvidenceBrowserDialog(
                                     minLines = 12,
                                     label = { Text("当前条目内容") }
                                 )
+                                Text(
+                                    text = "采集内容：协助方摄像头、协助方定位、被协助方当前屏幕",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -235,16 +239,28 @@ fun EvidenceBrowserDialog(
                                     }
                                 }
                                 selectedRecords.getOrNull(selectedRecordIndex)?.let { record ->
+                                    val helperCameraFile = store.resolveHelperCameraFile(
+                                        selectedSession.sessionId,
+                                        record.helperCameraFileName
+                                    )
                                     val screenshotFile = store.resolveScreenScreenshotFile(
                                         selectedSession.sessionId,
                                         record.screenScreenshotFileName
                                     )
                                     EvidenceAttachmentLine(
-                                        label = "屏幕截图",
+                                        label = "协助方摄像头截图",
+                                        value = record.helperCameraFileName
+                                    )
+                                    EvidenceImageCard(
+                                        label = "协助方摄像头预览",
+                                        file = helperCameraFile
+                                    )
+                                    EvidenceAttachmentLine(
+                                        label = "当前屏幕截图",
                                         value = record.screenScreenshotFileName
                                     )
                                     EvidenceImageCard(
-                                        label = "屏幕截图预览",
+                                        label = "当前屏幕预览",
                                         file = screenshotFile
                                     )
                                 }
@@ -355,9 +371,9 @@ private fun EvidenceRecordRow(
             )
             Text(
                 text = buildString {
-                    append("仅屏幕截图")
+                    append("协助方摄像头 + 当前屏幕")
                     record.locationSummary?.let {
-                        append(" · 定位 ")
+                        append(" · 协助方定位 ")
                         append(it)
                     }
                 },

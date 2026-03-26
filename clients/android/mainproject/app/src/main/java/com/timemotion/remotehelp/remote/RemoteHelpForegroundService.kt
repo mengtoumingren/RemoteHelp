@@ -25,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.collectLatest
@@ -46,7 +47,10 @@ class RemoteHelpForegroundService : Service() {
     private var helperOverlayRequested = false
     @Volatile
     private var helperOverlayRequestedSessionId: String? = null
+    @Volatile
+    private var helperOverlayAutoShownSessionId: String? = null
     private var helperOverlayRefreshJob: Job? = null
+    private var helperOverlayAutoShowJob: Job? = null
 
     val coordinator: RemoteHelpCoordinator
         get() = coordinatorInternal
@@ -100,8 +104,10 @@ class RemoteHelpForegroundService : Service() {
         runCatching {
             serviceScope.cancel()
             helperOverlayRefreshJob?.cancel()
+            helperOverlayAutoShowJob?.cancel()
             helperOverlayRequested = false
             helperOverlayRequestedSessionId = null
+            helperOverlayAutoShownSessionId = null
             if (this::helperOverlayManager.isInitialized) {
                 runCatching { helperOverlayManager.hide() }
             }
@@ -137,8 +143,10 @@ class RemoteHelpForegroundService : Service() {
             AppLog.d("RemoteHelpFgService", "请求显示协助者悬浮窗失败：当前没有会话")
             return
         }
+        helperOverlayAutoShowJob?.cancel()
         helperOverlayRequested = true
         helperOverlayRequestedSessionId = sessionId
+        helperOverlayAutoShownSessionId = sessionId
         AppLog.d("RemoteHelpFgService", "请求显示协助者悬浮窗")
         scheduleHelperOverlayRefresh(
             coordinatorInternal.uiState.value,
@@ -147,6 +155,7 @@ class RemoteHelpForegroundService : Service() {
     }
 
     fun requestHelperOverlayHide() {
+        helperOverlayAutoShowJob?.cancel()
         helperOverlayRequested = false
         helperOverlayRequestedSessionId = null
         AppLog.d("RemoteHelpFgService", "请求隐藏协助者悬浮窗")
@@ -165,6 +174,7 @@ class RemoteHelpForegroundService : Service() {
             yield()
             refreshHelperOverlay(uiState, callState)
         }
+        scheduleHelperOverlayAutoShow(uiState)
     }
 
     private fun refreshHelperOverlay(uiState: RemoteHelpUiState, callState: CallUiState) {
@@ -173,16 +183,17 @@ class RemoteHelpForegroundService : Service() {
             helperOverlayRequested = false
             helperOverlayRequestedSessionId = null
         }
+        if (helperOverlayAutoShownSessionId != null && helperOverlayAutoShownSessionId != currentSessionId) {
+            helperOverlayAutoShownSessionId = null
+        }
         AppLog.d(
             "RemoteHelpFgService",
-            "刷新悬浮窗 requested=$helperOverlayRequested screen=${uiState.currentScreen} side=${uiState.side} inRoom=${callState.isInRoom} remoteRenderer=${callState.remoteRenderer != null}"
+            "刷新悬浮窗 requested=$helperOverlayRequested screen=${uiState.currentScreen} side=${uiState.side} inRoom=${callState.isInRoom}"
         )
         if (
             !helperOverlayRequested ||
             uiState.side != DeviceSide.ELDER ||
-            uiState.currentScreen != AppScreen.ASSIST ||
-            !callState.isInRoom ||
-            callState.remoteRenderer == null
+            uiState.currentScreen != AppScreen.ASSIST
         ) {
             runCatching { helperOverlayManager.hide() }
                 .onFailure {
@@ -191,10 +202,43 @@ class RemoteHelpForegroundService : Service() {
             return
         }
         runCatching {
-            val shown = helperOverlayManager.show(callState.remoteRenderer)
+            val shown = helperOverlayManager.show()
             AppLog.d("RemoteHelpFgService", "显示协助者悬浮窗结果=$shown")
         }.onFailure {
             AppLog.logThrowable("RemoteHelpFgService", it, "显示协助者悬浮窗失败")
+        }
+    }
+
+    private fun scheduleHelperOverlayAutoShow(uiState: RemoteHelpUiState) {
+        val sessionId = uiState.activeSession?.requestId
+        if (sessionId == null) {
+            helperOverlayAutoShowJob?.cancel()
+            return
+        }
+        if (uiState.side != DeviceSide.ELDER || uiState.currentScreen != AppScreen.ASSIST) {
+            helperOverlayAutoShowJob?.cancel()
+            return
+        }
+        if (helperOverlayRequested || helperOverlayAutoShownSessionId == sessionId || !helperOverlayManager.hasPermission()) {
+            return
+        }
+        helperOverlayAutoShowJob?.cancel()
+        helperOverlayAutoShowJob = serviceScope.launch {
+            delay(AUTO_SHOW_DELAY_MS)
+            val latestUiState = coordinatorInternal.uiState.value
+            val latestSessionId = latestUiState.activeSession?.requestId
+            if (
+                latestUiState.side == DeviceSide.ELDER &&
+                latestUiState.currentScreen == AppScreen.ASSIST &&
+                latestSessionId == sessionId &&
+                helperOverlayManager.hasPermission() &&
+                !helperOverlayRequested
+            ) {
+                helperOverlayAutoShownSessionId = sessionId
+                helperOverlayRequested = true
+                helperOverlayRequestedSessionId = sessionId
+                refreshHelperOverlay(latestUiState, coordinatorInternal.callController.uiState.value)
+            }
         }
     }
 
@@ -278,6 +322,7 @@ class RemoteHelpForegroundService : Service() {
         private const val NOTIFICATION_ID = 1202
         private const val ACTION_STOP = "remote_help_background_stop"
         private const val ACTION_REFRESH = "remote_help_background_refresh"
+        private const val AUTO_SHOW_DELAY_MS = 1_200L
 
         fun start(context: Context) {
             runCatching {

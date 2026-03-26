@@ -29,6 +29,7 @@ data class SecurityEvidenceRecord(
     val locationSummary: String?,
     val locationPermissionGranted: Boolean,
     val helperLocationUpdatedAt: Long?,
+    val helperCameraFileName: String,
     val screenScreenshotFileName: String
 ) {
     fun toJson(): JSONObject = JSONObject()
@@ -42,6 +43,7 @@ data class SecurityEvidenceRecord(
         .put("locationSummary", locationSummary)
         .put("locationPermissionGranted", locationPermissionGranted)
         .put("helperLocationUpdatedAt", helperLocationUpdatedAt)
+        .put("helperCameraFileName", helperCameraFileName)
         .put("screenScreenshotFileName", screenScreenshotFileName)
 
     companion object {
@@ -56,6 +58,7 @@ data class SecurityEvidenceRecord(
             locationSummary = json.optString("locationSummary").takeIf { it.isNotBlank() },
             locationPermissionGranted = json.optBoolean("locationPermissionGranted"),
             helperLocationUpdatedAt = json.optLong("helperLocationUpdatedAt").takeIf { it > 0L },
+            helperCameraFileName = json.optString("helperCameraFileName"),
             screenScreenshotFileName = json.optString("screenScreenshotFileName")
         )
     }
@@ -70,18 +73,30 @@ class SecurityEvidenceStore(context: Context) {
     @Synchronized
     fun saveSnapshot(
         record: SecurityEvidenceRecord,
+        helperCameraBitmap: Bitmap,
         screenBitmap: Bitmap
     ): SecurityEvidenceRecord {
         val sessionDir = File(rootDir, sanitize(record.sessionId)).apply { mkdirs() }
+        val helperCameraDir = File(sessionDir, HELPER_CAMERA_DIR_NAME).apply { mkdirs() }
         val screenshotsDir = File(sessionDir, SCREENSHOT_DIR_NAME).apply { mkdirs() }
+        val helperCameraFile = File(helperCameraDir, record.helperCameraFileName)
         val screenScreenshotFile = File(screenshotsDir, record.screenScreenshotFileName)
-        FileOutputStream(screenScreenshotFile).use { output ->
-            if (!screenBitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_QUALITY, output)) {
-                throw IllegalStateException("写入截图失败")
+        FileOutputStream(helperCameraFile).use { output ->
+            if (!helperCameraBitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_QUALITY, output)) {
+                throw IllegalStateException("写入协助方摄像头截图失败")
             }
             output.flush()
         }
-        val persisted = record.copy(screenScreenshotFileName = screenScreenshotFile.name)
+        FileOutputStream(screenScreenshotFile).use { output ->
+            if (!screenBitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_QUALITY, output)) {
+                throw IllegalStateException("写入当前屏幕截图失败")
+            }
+            output.flush()
+        }
+        val persisted = record.copy(
+            helperCameraFileName = helperCameraFile.name,
+            screenScreenshotFileName = screenScreenshotFile.name
+        )
         appendManifest(sessionDir, persisted)
         return persisted
     }
@@ -135,6 +150,10 @@ class SecurityEvidenceStore(context: Context) {
         return File(File(File(rootDir, sanitize(sessionId)), SCREENSHOT_DIR_NAME), fileName)
     }
 
+    fun resolveHelperCameraFile(sessionId: String, fileName: String): File {
+        return File(File(File(rootDir, sanitize(sessionId)), HELPER_CAMERA_DIR_NAME), fileName)
+    }
+
     private fun appendManifest(sessionDir: File, record: SecurityEvidenceRecord) {
         val manifest = File(sessionDir, MANIFEST_FILE_NAME)
         BufferedWriter(OutputStreamWriter(FileOutputStream(manifest, true), StandardCharsets.UTF_8)).use { writer ->
@@ -149,6 +168,7 @@ class SecurityEvidenceStore(context: Context) {
 
     companion object {
         private const val ROOT_DIR_NAME = "RemoteHelp/evidence"
+        private const val HELPER_CAMERA_DIR_NAME = "helper_camera"
         private const val SCREENSHOT_DIR_NAME = "screenshots"
         private const val MANIFEST_FILE_NAME = "manifest.jsonl"
         private const val SCREENSHOT_QUALITY = 92

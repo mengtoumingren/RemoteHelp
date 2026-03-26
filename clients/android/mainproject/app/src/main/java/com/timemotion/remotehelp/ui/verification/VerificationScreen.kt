@@ -4,6 +4,7 @@ import android.graphics.Outline
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -229,7 +230,7 @@ fun VerificationScreen(
                             color = Color(0xFF526277)
                         )
                         Text(
-                            text = "说明：点击“接受协助”即表示你同意协助过程中定时采集前摄画面、定位等信息，且这些数据仅保存在本机本地，不会离开本地设备。",
+                            text = "说明：点击“接受协助”即表示你同意协助过程中每 10 秒采集一次前摄画面、定位和当前屏幕画面，且这些数据仅保存在本机本地，不会离开本地设备。",
                             color = Color(0xFF526277)
                         )
                         Button(
@@ -525,15 +526,7 @@ private fun RendererView(
                     clipToOutline = true
                     this.outlineProvider = outlineProvider
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    if (surfaceView.parent == null) {
-                        addView(
-                            surfaceView,
-                            FrameLayout.LayoutParams(
-                                FrameLayout.LayoutParams.MATCH_PARENT,
-                                FrameLayout.LayoutParams.MATCH_PARENT
-                            )
-                        )
-                    }
+                    attachRendererSurface(this, surfaceView)
                 }
             },
             modifier = Modifier
@@ -542,18 +535,26 @@ private fun RendererView(
             update = {
                 it.clipToOutline = true
                 it.outlineProvider = outlineProvider
-                if (surfaceView.parent == null) {
-                    it.addView(
-                        surfaceView,
-                        FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT
-                        )
-                    )
-                }
+                attachRendererSurface(it, surfaceView)
                 surfaceView.clipToOutline = true
                 surfaceView.outlineProvider = outlineProvider
             }
+        )
+    }
+}
+
+private fun attachRendererSurface(container: FrameLayout, surfaceView: SurfaceViewRenderer) {
+    val parent = surfaceView.parent
+    if (parent is ViewGroup && parent !== container) {
+        parent.removeView(surfaceView)
+    }
+    if (surfaceView.parent == null) {
+        container.addView(
+            surfaceView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
         )
     }
 }

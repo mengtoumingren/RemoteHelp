@@ -63,6 +63,7 @@ import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
 import android.widget.FrameLayout
+import android.view.ViewGroup
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
@@ -559,11 +560,11 @@ private fun ElderAssistBody(
             title = "协助悬浮窗",
             status = if (overlayPermissionGranted) "已开启" else "未开启",
             description = if (overlayPermissionGranted) {
-                "悬浮窗权限已具备，点击按钮后才会显示协助者实时视频的小悬浮窗，不会自动弹出。"
+                "悬浮窗权限已具备，进入协助页后会自动显示远程协助图标，点击图标可回到 App。"
             } else {
-                "点击去授权后才会打开系统悬浮窗设置页，授权后会显示协助者实时视频的小悬浮窗。"
+                "点击去授权后才会打开系统悬浮窗设置页，授权后进入协助页会自动显示远程协助图标。"
             },
-            buttonText = if (overlayPermissionGranted) "显示悬浮窗" else "去授权",
+            buttonText = if (overlayPermissionGranted) "显示图标" else "去授权",
             onClick = onOpenOverlaySettings
         )
         CardBlock {
@@ -710,18 +711,13 @@ private fun ControlRendererPanel(
             factory = {
                 FrameLayout(it).apply {
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    if (surfaceView.parent == null) {
-                        addView(
-                            surfaceView,
-                            FrameLayout.LayoutParams(
-                                FrameLayout.LayoutParams.MATCH_PARENT,
-                                FrameLayout.LayoutParams.MATCH_PARENT
-                            )
-                        )
-                    }
+                    attachRendererSurface(this, surfaceView)
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            update = {
+                attachRendererSurface(it, surfaceView)
+            }
         )
         if (allowTouch) {
             Box(
@@ -788,6 +784,22 @@ private fun ControlRendererPanel(
                     }
             )
         }
+    }
+}
+
+private fun attachRendererSurface(container: FrameLayout, surfaceView: SurfaceViewRenderer) {
+    val parent = surfaceView.parent
+    if (parent is ViewGroup && parent !== container) {
+        parent.removeView(surfaceView)
+    }
+    if (surfaceView.parent == null) {
+        container.addView(
+            surfaceView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
     }
 }
 
