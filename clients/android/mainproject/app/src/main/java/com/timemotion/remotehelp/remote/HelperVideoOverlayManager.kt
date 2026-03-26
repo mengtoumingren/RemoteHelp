@@ -2,7 +2,10 @@ package com.timemotion.remotehelp.remote
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -18,9 +21,14 @@ import android.graphics.drawable.GradientDrawable
 
 class HelperVideoOverlayManager(private val appContext: Context) {
     private val lock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
     private var overlayView: View? = null
+    @Volatile
+    private var previewImageView: ImageView? = null
+    @Volatile
+    private var currentPreviewBitmap: Bitmap? = null
 
     fun hasPermission(): Boolean = Settings.canDrawOverlays(appContext)
 
@@ -53,6 +61,32 @@ class HelperVideoOverlayManager(private val appContext: Context) {
         }
     }
 
+    fun updatePreview(bitmap: Bitmap?) {
+        val imageView = previewImageView ?: run {
+            if (bitmap != null && !bitmap.isRecycled) {
+                bitmap.recycle()
+            }
+            return
+        }
+        val applyBitmap = Runnable {
+            val previousBitmap = currentPreviewBitmap
+            currentPreviewBitmap = bitmap
+            if (bitmap == null) {
+                imageView.setImageResource(R.mipmap.ic_launcher_round)
+            } else {
+                imageView.setImageBitmap(bitmap)
+            }
+            if (previousBitmap != null && previousBitmap !== bitmap && !previousBitmap.isRecycled) {
+                previousBitmap.recycle()
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            applyBitmap.run()
+        } else {
+            mainHandler.post(applyBitmap)
+        }
+    }
+
     private fun addOverlay() {
         val windowManager = appContext.getSystemService(WindowManager::class.java)
         val root = FrameLayout(appContext).apply {
@@ -77,6 +111,22 @@ class HelperVideoOverlayManager(private val appContext: Context) {
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.CENTER_CROP
         }
+        val logoContainer = FrameLayout(appContext).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(17).toFloat()
+                setColor(android.graphics.Color.TRANSPARENT)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                clipToOutline = true
+            }
+        }
+        logoContainer.addView(
+            logo,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
         val label = TextView(appContext).apply {
             text = "协助中"
             setTextColor(android.graphics.Color.WHITE)
@@ -84,7 +134,7 @@ class HelperVideoOverlayManager(private val appContext: Context) {
             gravity = Gravity.CENTER
         }
         bubble.addView(
-            logo,
+            logoContainer,
             LinearLayout.LayoutParams(dp(34), dp(34))
         )
         bubble.addView(
@@ -96,6 +146,7 @@ class HelperVideoOverlayManager(private val appContext: Context) {
                 topMargin = dp(3)
             }
         )
+        previewImageView = logo
         root.addView(
             bubble,
             FrameLayout.LayoutParams(
@@ -138,7 +189,13 @@ class HelperVideoOverlayManager(private val appContext: Context) {
         }.onFailure {
             AppLog.logThrowable("HelperVideoOverlay", it, "移除悬浮窗失败")
         }
+        val bitmap = currentPreviewBitmap
+        currentPreviewBitmap = null
+        if (bitmap != null && !bitmap.isRecycled) {
+            bitmap.recycle()
+        }
         overlayView = null
+        previewImageView = null
     }
 
     private fun openApp() {

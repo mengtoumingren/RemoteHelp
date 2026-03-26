@@ -22,9 +22,11 @@ import com.timemotion.remotehelp.core.RemoteHelpUiState
 import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.webrtc.CallUiState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.yield
@@ -51,6 +53,9 @@ class RemoteHelpForegroundService : Service() {
     private var helperOverlayAutoShownSessionId: String? = null
     private var helperOverlayRefreshJob: Job? = null
     private var helperOverlayAutoShowJob: Job? = null
+    private var helperOverlayPreviewJob: Job? = null
+    @Volatile
+    private var helperOverlayPreviewSessionId: String? = null
 
     val coordinator: RemoteHelpCoordinator
         get() = coordinatorInternal
@@ -105,9 +110,11 @@ class RemoteHelpForegroundService : Service() {
             serviceScope.cancel()
             helperOverlayRefreshJob?.cancel()
             helperOverlayAutoShowJob?.cancel()
+            helperOverlayPreviewJob?.cancel()
             helperOverlayRequested = false
             helperOverlayRequestedSessionId = null
             helperOverlayAutoShownSessionId = null
+            helperOverlayPreviewSessionId = null
             if (this::helperOverlayManager.isInitialized) {
                 runCatching { helperOverlayManager.hide() }
             }
@@ -160,11 +167,14 @@ class RemoteHelpForegroundService : Service() {
         helperOverlayRequestedSessionId = null
         AppLog.d("RemoteHelpFgService", "请求隐藏协助者悬浮窗")
         helperOverlayRefreshJob?.cancel()
+        helperOverlayPreviewJob?.cancel()
+        helperOverlayPreviewSessionId = null
         serviceScope.launch {
             runCatching { helperOverlayManager.hide() }
                 .onFailure {
                     AppLog.logThrowable("RemoteHelpFgService", it, "隐藏协助者悬浮窗失败")
                 }
+            helperOverlayManager.updatePreview(null)
         }
     }
 
@@ -195,17 +205,68 @@ class RemoteHelpForegroundService : Service() {
             uiState.side != DeviceSide.ELDER ||
             uiState.currentScreen != AppScreen.ASSIST
         ) {
+            helperOverlayPreviewJob?.cancel()
+            helperOverlayPreviewJob = null
+            helperOverlayPreviewSessionId = null
             runCatching { helperOverlayManager.hide() }
                 .onFailure {
                     AppLog.logThrowable("RemoteHelpFgService", it, "隐藏协助者悬浮窗失败")
                 }
+            helperOverlayManager.updatePreview(null)
             return
         }
         runCatching {
             val shown = helperOverlayManager.show()
             AppLog.d("RemoteHelpFgService", "显示协助者悬浮窗结果=$shown")
+            if (shown) {
+                scheduleHelperOverlayPreview(uiState)
+            }
         }.onFailure {
             AppLog.logThrowable("RemoteHelpFgService", it, "显示协助者悬浮窗失败")
+        }
+    }
+
+    private fun scheduleHelperOverlayPreview(uiState: RemoteHelpUiState) {
+        val sessionId = uiState.activeSession?.requestId ?: run {
+            helperOverlayPreviewJob?.cancel()
+            helperOverlayPreviewJob = null
+            helperOverlayPreviewSessionId = null
+            helperOverlayManager.updatePreview(null)
+            return
+        }
+        if (
+            helperOverlayPreviewJob?.isActive == true &&
+            helperOverlayPreviewSessionId == sessionId
+        ) {
+            return
+        }
+        helperOverlayPreviewJob?.cancel()
+        helperOverlayPreviewSessionId = sessionId
+        helperOverlayPreviewJob = serviceScope.launch {
+            while (isActive) {
+                val latestUiState = coordinatorInternal.uiState.value
+                val latestSessionId = latestUiState.activeSession?.requestId
+                val shouldContinue =
+                    helperOverlayRequested &&
+                        latestUiState.side == DeviceSide.ELDER &&
+                        latestUiState.currentScreen == AppScreen.ASSIST &&
+                        latestSessionId == sessionId
+                if (!shouldContinue) {
+                    break
+                }
+                val bitmap = runCatching {
+                    coordinatorInternal.callController.captureRemoteVideoBitmap()
+                }.onFailure {
+                    if (it !is CancellationException) {
+                        AppLog.logThrowable("RemoteHelpFgService", it, "刷新协助者悬浮窗截图失败")
+                    }
+                }.getOrNull()
+                if (bitmap != null) {
+                    helperOverlayManager.updatePreview(bitmap)
+                }
+                delay(OVERLAY_PREVIEW_INTERVAL_MS)
+            }
+            helperOverlayManager.updatePreview(null)
         }
     }
 
@@ -323,6 +384,8 @@ class RemoteHelpForegroundService : Service() {
         private const val ACTION_STOP = "remote_help_background_stop"
         private const val ACTION_REFRESH = "remote_help_background_refresh"
         private const val AUTO_SHOW_DELAY_MS = 1_200L
+        private const val OVERLAY_PREVIEW_INTERVAL_MS = 100L
+        private const val OVERLAY_PREVIEW_SIZE_PX = 96
 
         fun start(context: Context) {
             runCatching {

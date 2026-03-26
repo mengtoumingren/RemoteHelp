@@ -137,7 +137,7 @@ private suspend fun captureWindowBitmap(activity: Activity, width: Int, height: 
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     return suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
-        PixelCopy.request(activity.window, bitmap, { result ->
+        PixelCopy.request(activity.window, bitmap, { result -> 
             if (result == PixelCopy.SUCCESS) {
                 continuation.resume(bitmap)
             } else {
