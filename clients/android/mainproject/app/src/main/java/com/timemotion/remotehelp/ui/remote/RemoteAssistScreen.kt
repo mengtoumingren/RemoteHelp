@@ -197,7 +197,7 @@ private fun HelperAssistBody(
     onFrameDrag: (Float, Float, Float, Float) -> Unit
 ) {
     Box(
-        modifier = modifier,
+        modifier = modifier.background(Color(0xFF122030)),
         contentAlignment = Alignment.Center
     ) {
             Box(
@@ -345,31 +345,36 @@ private fun HelperAssistBottomBar(
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val itemWidth = 56.dp
+                val itemGap = 6.dp
                 AssistFloatingButton(
                     title = "返回",
                     onClick = onSendBack,
                     modifier = Modifier.width(itemWidth)
                 )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "桌面",
                     onClick = onSendHome,
                     modifier = Modifier.width(itemWidth)
                 )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "菜单",
                     onClick = onSendRecents,
                     modifier = Modifier.width(itemWidth)
                 )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "键盘",
                     active = keyboardEnabled,
                     onClick = { keyboardEnabled = !keyboardEnabled },
                     modifier = Modifier.width(itemWidth)
                 )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 Box(
                     modifier = Modifier.wrapContentSize(Alignment.TopEnd)
                 ) {
@@ -680,7 +685,7 @@ private fun ControlRendererPanel(
 ) {
     if (renderer == null) {
         Box(
-            modifier = modifier.background(Color(0xFF203040)),
+            modifier = modifier.background(Color(0xFF122030)),
             contentAlignment = Alignment.Center
         ) {
             Text(placeholder, color = Color.White)
@@ -704,7 +709,7 @@ private fun ControlRendererPanel(
 
     Box(
         modifier = modifier
-            .background(Color.Black)
+            .background(Color(0xFF122030))
             .onSizeChanged { size = it }
     ) {
         AndroidView(
