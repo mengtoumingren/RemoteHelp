@@ -55,12 +55,10 @@ fun RemoteAssistRouteHost(
 ) {
     val context = LocalContext.current
     val latestUiState by rememberUpdatedState(uiState)
-    val latestRemoteState by rememberUpdatedState(remoteState)
     var notificationPermissionGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) }
     var overlayPermissionGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var assistPermissionPromptVisible by remember { mutableStateOf(false) }
     var assistPermissionPromptSessionId by remember { mutableStateOf<String?>(null) }
-    var openAccessibilitySettingsAfterCaptureSessionId by remember { mutableStateOf<String?>(null) }
     var elderControllerSeenSessionId by remember { mutableStateOf<String?>(null) }
     var elderControllerExitHandledSessionId by remember { mutableStateOf<String?>(null) }
     var assistPermissionPromptSuppressedSessionId by remember { mutableStateOf<String?>(null) }
@@ -70,24 +68,11 @@ fun RemoteAssistRouteHost(
             val data = result.data
             if (result.resultCode == Activity.RESULT_OK && data != null) {
                 coordinator.remoteController.startTargetCapture(result.resultCode, data)
-                if (
-                    openAccessibilitySettingsAfterCaptureSessionId != null &&
-                    !latestRemoteState.targetStatus.accessibilityEnabled
-                ) {
-                    openAccessibilitySettingsAfterCaptureSessionId = null
-                    runCatching {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    }.onFailure {
-                        AppLog.logThrowable("RemoteHelpApp", it, "打开无障碍设置失败")
-                    }
-                }
             } else {
                 coordinator.remoteController.onCapturePermissionDenied()
-                openAccessibilitySettingsAfterCaptureSessionId = null
             }
         }.onFailure {
             AppLog.logThrowable("RemoteHelpApp", it, "处理屏幕共享授权结果失败")
-            openAccessibilitySettingsAfterCaptureSessionId = null
         }
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
@@ -159,8 +144,6 @@ fun RemoteAssistRouteHost(
             val needsCapture = !remoteState.targetStatus.captureActive
             val needsAccessibility = !remoteState.targetStatus.accessibilityEnabled
             if (needsCapture) {
-                openAccessibilitySettingsAfterCaptureSessionId =
-                    if (needsAccessibility) assistSessionId else null
                 runCatching { projectionLauncher.launch(projectionIntent) }
                     .onFailure {
                         AppLog.logThrowable("RemoteHelpApp", it, "申请屏幕共享失败")
@@ -190,14 +173,12 @@ fun RemoteAssistRouteHost(
             assistSessionId == null
         ) {
             assistPermissionPromptVisible = false
-            openAccessibilitySettingsAfterCaptureSessionId = null
             return@LaunchedEffect
         }
         val needsCapture = !remoteState.targetStatus.captureActive
         val needsAccessibility = !remoteState.targetStatus.accessibilityEnabled
         if (!needsCapture && !needsAccessibility) {
             assistPermissionPromptVisible = false
-            openAccessibilitySettingsAfterCaptureSessionId = null
             return@LaunchedEffect
         }
         if (
