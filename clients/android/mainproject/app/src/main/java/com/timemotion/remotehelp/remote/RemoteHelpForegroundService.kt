@@ -76,7 +76,24 @@ class RemoteHelpForegroundService : Service() {
             startAsForeground(currentNotificationText)
             coordinatorInternal = RemoteHelpCoordinator(applicationContext)
             evidenceStore = SecurityEvidenceStore(applicationContext)
-            helperOverlayManager = HelperVideoOverlayManager(applicationContext)
+            helperOverlayManager = HelperVideoOverlayManager(
+                appContext = applicationContext,
+                onHangUpClick = {
+                runCatching {
+                    coordinatorInternal.endCurrentSession("已挂断远程协助")
+                }.onFailure {
+                    AppLog.logThrowable("RemoteHelpFgService", it, "悬浮窗挂断失败")
+                }
+                requestHelperOverlayHide()
+                },
+                onToggleSpeakerClick = {
+                runCatching {
+                    coordinatorInternal.callController.toggleSpeakerOutput()
+                }.onFailure {
+                    AppLog.logThrowable("RemoteHelpFgService", it, "悬浮窗切换扬声器失败")
+                }
+                }
+            )
             observeCoordinatorState()
         }.onFailure {
             AppLog.logThrowable("RemoteHelpFgService", it, "前台服务启动失败")
@@ -151,6 +168,7 @@ class RemoteHelpForegroundService : Service() {
             }.collectLatest { (uiState, callState, remoteState) ->
                 currentNotificationText = buildNotificationText(uiState)
                 refreshNotification()
+                helperOverlayManager.updateSpeakerState(callState.isSpeakerOn)
                 scheduleHelperOverlayRefresh(uiState, callState)
                 scheduleEvidenceCapture(uiState, callState, remoteState)
             }

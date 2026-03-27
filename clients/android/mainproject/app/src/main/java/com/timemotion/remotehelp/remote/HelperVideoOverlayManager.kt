@@ -1,6 +1,7 @@
 package com.timemotion.remotehelp.remote
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
@@ -8,25 +9,38 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.ImageButton
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.TextView
 import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.MainActivity
 import com.timemotion.remotehelp.R
 import android.graphics.drawable.GradientDrawable
+import kotlin.math.abs
 
-class HelperVideoOverlayManager(private val appContext: Context) {
+class HelperVideoOverlayManager(
+    private val appContext: Context,
+    private val onHangUpClick: () -> Unit,
+    private val onToggleSpeakerClick: () -> Unit
+) {
     private val lock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val touchSlop = ViewConfiguration.get(appContext).scaledTouchSlop
 
     @Volatile
     private var overlayView: View? = null
     @Volatile
     private var previewImageView: ImageView? = null
+    @Volatile
+    private var speakerButton: ImageButton? = null
+    @Volatile
+    private var speakerEnabled: Boolean = true
     @Volatile
     private var currentPreviewBitmap: Bitmap? = null
 
@@ -61,6 +75,29 @@ class HelperVideoOverlayManager(private val appContext: Context) {
         }
     }
 
+    fun updateSpeakerState(enabled: Boolean) {
+        speakerEnabled = enabled
+        val button = speakerButton ?: return
+        val iconRes = if (enabled) {
+            android.R.drawable.ic_lock_silent_mode_off
+        } else {
+            android.R.drawable.ic_lock_silent_mode
+        }
+        val apply = Runnable {
+            button.setImageResource(iconRes)
+            button.background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(if (enabled) 0xCC1F2937.toInt() else 0xCC374151.toInt())
+                setStroke(dp(1), if (enabled) 0x33FFFFFF else 0x22FFFFFF)
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            apply.run()
+        } else {
+            mainHandler.post(apply)
+        }
+    }
+
     fun updatePreview(bitmap: Bitmap?) {
         val imageView = previewImageView ?: run {
             if (bitmap != null && !bitmap.isRecycled) {
@@ -89,72 +126,103 @@ class HelperVideoOverlayManager(private val appContext: Context) {
 
     private fun addOverlay() {
         val windowManager = appContext.getSystemService(WindowManager::class.java)
-        val root = FrameLayout(appContext).apply {
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            setOnClickListener { openApp() }
-            isClickable = true
-        }
-        val bubble = LinearLayout(appContext).apply {
+        val root = DragOverlayLayout(appContext).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
-                setColor(0xCC111827.toInt())
-                setStroke(dp(1), 0x22FFFFFF)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                clipToOutline = true
             }
-            setOnClickListener { openApp() }
             isClickable = true
+            minimumWidth = dp(60)
+            minimumHeight = dp(170)
+            setOnTapListener { openApp() }
+            setOnDragListener { newX, newY, params ->
+                params.x = newX.coerceIn(0, appContext.resources.displayMetrics.widthPixels)
+                params.y = newY.coerceIn(0, appContext.resources.displayMetrics.heightPixels)
+                runCatching {
+                    windowManager.updateViewLayout(this@apply, params)
+                }
+            }
         }
-        val logo = ImageView(appContext).apply {
-            setImageResource(R.mipmap.ic_launcher_round)
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.CENTER_CROP
-        }
-        val logoContainer = FrameLayout(appContext).apply {
+        val previewContainer = FrameLayout(appContext).apply {
             background = GradientDrawable().apply {
-                cornerRadius = dp(17).toFloat()
+                cornerRadius = dp(14).toFloat()
                 setColor(android.graphics.Color.TRANSPARENT)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 clipToOutline = true
             }
         }
-        logoContainer.addView(
-            logo,
+        val preview = ImageView(appContext).apply {
+            setImageResource(R.mipmap.ic_launcher_round)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            adjustViewBounds = false
+        }
+        previewContainer.addView(
+            preview,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
-        val label = TextView(appContext).apply {
-            text = "协助中"
-            setTextColor(android.graphics.Color.WHITE)
-            textSize = 10f
-            gravity = Gravity.CENTER
-        }
-        bubble.addView(
-            logoContainer,
-            LinearLayout.LayoutParams(dp(34), dp(34))
-        )
-        bubble.addView(
-            label,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(3)
-            }
-        )
-        previewImageView = logo
+        previewImageView = preview
         root.addView(
-            bubble,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                gravity = Gravity.CENTER
+            previewContainer,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(80)
+            )
+        )
+        val speakerToggle = ImageButton(appContext).apply {
+            setImageResource(
+                if (speakerEnabled) {
+                    android.R.drawable.ic_lock_silent_mode_off
+                } else {
+                    android.R.drawable.ic_lock_silent_mode
+                }
+            )
+            scaleType = ImageView.ScaleType.CENTER
+            imageTintList = ColorStateList.valueOf(android.graphics.Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(if (speakerEnabled) 0xCC1F2937.toInt() else 0xCC374151.toInt())
+                setStroke(dp(1), if (speakerEnabled) 0x33FFFFFF else 0x22FFFFFF)
             }
+            setOnClickListener { onToggleSpeakerClick() }
+        }
+        speakerButton = speakerToggle
+        root.addView(
+            speakerToggle,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(40)
+            ).apply {
+                topMargin = dp(5)
+                bottomMargin = dp(5)
+            }
+        )
+        val hangUpButton = Button(appContext).apply {
+            text = "挂断"
+            isAllCaps = false
+            textSize = 12f
+            minHeight = 0
+            minWidth = 0
+            setPadding(dp(5), 0, dp(5), 0)
+            includeFontPadding = false
+            setTextColor(android.graphics.Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0xFFD32F2F.toInt())
+                setStroke(dp(1), 0x55FFCDD2)
+            }
+            setOnClickListener { onHangUpClick() }
+        }
+        root.addView(
+            hangUpButton,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(40)
+            )
         )
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -175,7 +243,10 @@ class HelperVideoOverlayManager(private val appContext: Context) {
             gravity = Gravity.TOP or Gravity.END
             x = dp(6)
             y = dp(6)
+            width = dp(60)
+            height = dp(170)
         }
+        paramsRef = params
         windowManager.addView(root, params)
         overlayView = root
         AppLog.d("HelperVideoOverlay", "addOverlay completed")
@@ -196,6 +267,8 @@ class HelperVideoOverlayManager(private val appContext: Context) {
         }
         overlayView = null
         previewImageView = null
+        speakerButton = null
+        paramsRef = null
     }
 
     private fun openApp() {
@@ -221,4 +294,83 @@ class HelperVideoOverlayManager(private val appContext: Context) {
     private fun dp(value: Int): Int {
         return (value * appContext.resources.displayMetrics.density).toInt().coerceAtLeast(1)
     }
+
+    private inner class DragOverlayLayout(context: Context) : LinearLayout(context) {
+        private var startRawX = 0f
+        private var startRawY = 0f
+        private var startLayoutX = 0
+        private var startLayoutY = 0
+        private var dragging = false
+        private var onTap: (() -> Unit)? = null
+        private var onDrag: ((newX: Int, newY: Int, params: WindowManager.LayoutParams) -> Unit)? = null
+
+        fun setOnTapListener(listener: (() -> Unit)?) {
+            onTap = listener
+        }
+
+        fun setOnDragListener(listener: ((newX: Int, newY: Int, params: WindowManager.LayoutParams) -> Unit)?) {
+            onDrag = listener
+        }
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            if (paramsRef == null) {
+                return super.onInterceptTouchEvent(ev)
+            }
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startRawX = ev.rawX
+                    startRawY = ev.rawY
+                    paramsRef?.let {
+                        startLayoutX = it.x
+                        startLayoutY = it.y
+                    }
+                    dragging = false
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (ev.rawX - startRawX).toInt()
+                    val dy = (ev.rawY - startRawY).toInt()
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        dragging = true
+                        return true
+                    }
+                }
+
+                MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_UP -> {
+                    dragging = false
+                }
+            }
+            return dragging && paramsRef != null
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            val params = paramsRef ?: return false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> return true
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - startRawX).toInt()
+                    val dy = (event.rawY - startRawY).toInt()
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        dragging = true
+                    }
+                    if (dragging) {
+                        onDrag?.invoke(startLayoutX - dx, startLayoutY + dy, params)
+                    }
+                    return true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!dragging) {
+                        onTap?.invoke()
+                    }
+                    dragging = false
+                    return true
+                }
+            }
+            return super.onTouchEvent(event)
+        }
+    }
+
+    @Volatile
+    private var paramsRef: WindowManager.LayoutParams? = null
 }
