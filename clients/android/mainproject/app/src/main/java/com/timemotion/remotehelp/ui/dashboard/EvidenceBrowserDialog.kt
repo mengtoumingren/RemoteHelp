@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -173,25 +174,20 @@ private fun BrowserHeader(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Text(
+                text = "证据页面",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
             Button(
                 onClick = onDismiss,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Text("返回")
             }
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = "证据页面",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "会话 -> 记录 -> 概览 / 缩略图 -> 详情弹窗",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
         Text(
             text = "会话 $sessionCount 个，记录 $recordCount 条",
@@ -433,6 +429,7 @@ private fun RecordCard(
             Text(
                 text = overviewText,
                 modifier = Modifier.clickable(onClick = onOpenRecord),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
@@ -446,18 +443,29 @@ private fun RecordCard(
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            EvidenceThumbnailCard(
-                label = "协助方摄像头缩略图",
-                file = helperCameraFile,
-                hint = "点击查看大图",
-                onClick = { onOpenHelperImage(helperCameraFile) }
-            )
-            EvidenceThumbnailCard(
-                label = "当前屏幕缩略图",
-                file = screenshotFile,
-                hint = "点击查看大图",
-                onClick = { onOpenScreenImage(screenshotFile) }
-            )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val thumbnailGap = 10.dp
+                val thumbnailWidth = (maxWidth - thumbnailGap) / 2
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(thumbnailGap)
+                ) {
+                    EvidenceThumbnailCard(
+                        modifier = Modifier.width(thumbnailWidth),
+                        label = "协助方摄像头缩略图",
+                        file = helperCameraFile,
+                        hint = "点击查看大图",
+                        onClick = { onOpenHelperImage(helperCameraFile) }
+                    )
+                    EvidenceThumbnailCard(
+                        modifier = Modifier.width(thumbnailWidth),
+                        label = "当前屏幕缩略图",
+                        file = screenshotFile,
+                        hint = "点击查看大图",
+                        onClick = { onOpenScreenImage(screenshotFile) }
+                    )
+                }
+            }
         }
     }
 }
@@ -647,12 +655,14 @@ private fun ImagePreviewDialog(
 
 @Composable
 private fun EvidenceThumbnailCard(
+    modifier: Modifier = Modifier,
     label: String,
     file: File,
     hint: String,
     onClick: () -> Unit
 ) {
     EvidenceImageCard(
+        modifier = modifier,
         label = label,
         file = file,
         hint = hint,
@@ -663,6 +673,7 @@ private fun EvidenceThumbnailCard(
 
 @Composable
 private fun EvidenceImageCard(
+    modifier: Modifier = Modifier,
     label: String,
     file: File,
     hint: String,
@@ -687,7 +698,7 @@ private fun EvidenceImageCard(
 
     Card(
         modifier = Modifier
-            .fillMaxWidth()
+            .then(modifier)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {

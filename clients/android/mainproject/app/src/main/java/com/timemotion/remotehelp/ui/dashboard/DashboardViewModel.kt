@@ -33,6 +33,8 @@ class DashboardViewModel(
     fun rejectVerificationRequest() = coordinator.rejectVerificationRequest()
     fun confirmPendingInvite() = coordinator.confirmPendingInvite()
     fun dismissPendingInvite() = coordinator.dismissPendingInvite()
+    fun updateHelperLocationPermissionGranted(granted: Boolean) =
+        coordinator.updateHelperLocationPermissionGranted(granted)
 
     val activeSession: ActiveHelpSession?
         get() = uiState.value.activeSession

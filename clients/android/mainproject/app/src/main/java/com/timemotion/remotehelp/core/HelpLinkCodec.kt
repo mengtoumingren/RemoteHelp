@@ -23,14 +23,14 @@ object HelpLinkCodec {
     private const val SECRET = "remotehelp-demo-secret"
     private const val DEFAULT_TTL_MS = 5 * 60 * 1000L
 
-    fun createInvite(
+    fun createInvitePayload(
         helperName: String,
         elderName: String,
         elderPhone: String,
         now: Long = System.currentTimeMillis()
-    ): Pair<HelpInvitePayload, String> {
+    ): HelpInvitePayload {
         val sessionId = "sess-${UUID.randomUUID().toString().take(8)}"
-        val payload = HelpInvitePayload(
+        return HelpInvitePayload(
             sessionId = sessionId,
             requestId = sessionId,
             helperName = helperName.trim().ifBlank { "协助方" },
@@ -39,6 +39,15 @@ object HelpLinkCodec {
             createdAt = now,
             expiresAt = now + DEFAULT_TTL_MS
         )
+    }
+
+    fun createInvite(
+        helperName: String,
+        elderName: String,
+        elderPhone: String,
+        now: Long = System.currentTimeMillis()
+    ): Pair<HelpInvitePayload, String> {
+        val payload = createInvitePayload(helperName, elderName, elderPhone, now)
         return payload to encode(payload)
     }
 

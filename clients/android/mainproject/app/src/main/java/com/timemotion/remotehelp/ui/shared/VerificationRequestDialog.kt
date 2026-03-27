@@ -8,20 +8,50 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.timemotion.remotehelp.core.ActiveHelpSession
 import com.timemotion.remotehelp.core.formatRemaining
+import kotlinx.coroutines.delay
 
 @Composable
 fun VerificationRequestDialog(
     session: ActiveHelpSession,
+    expiresAt: Long,
     locationPermissionGranted: Boolean,
     onRequestLocationPermission: () -> Unit,
     onAccept: () -> Unit,
     onReject: () -> Unit
 ) {
+    var currentTime by remember(session.requestId, expiresAt) {
+        mutableStateOf(System.currentTimeMillis())
+    }
+    var actionHandled by remember(session.requestId, expiresAt) {
+        mutableStateOf(false)
+    }
+
+    LaunchedEffect(session.requestId, expiresAt, actionHandled) {
+        if (actionHandled) {
+            return@LaunchedEffect
+        }
+        while (!actionHandled) {
+            val now = System.currentTimeMillis()
+            currentTime = now
+            if (now >= expiresAt) {
+                actionHandled = true
+                onReject()
+                break
+            }
+            delay(1000L)
+        }
+    }
+
     AlertDialog(
         onDismissRequest = {},
         title = { Text("视频认证请求") },
@@ -32,7 +62,10 @@ fun VerificationRequestDialog(
                     color = Color(0xFF526277)
                 )
                 InfoLine("协助对象", "${session.elderName} · ${session.elderPhone}")
-                InfoLine("剩余有效期", formatRemaining(session.expiresAt))
+                InfoLine(
+                    "倒计时",
+                    if (actionHandled) "已提交" else formatRemaining(expiresAt, currentTime)
+                )
                 InfoLine(
                     "当前定位权限",
                     if (locationPermissionGranted) "已授权" else "未授权"
@@ -49,12 +82,18 @@ fun VerificationRequestDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onAccept) {
+            Button(onClick = {
+                actionHandled = true
+                onAccept()
+            }) {
                 Text("接受")
             }
         },
         dismissButton = {
-            OutlinedButton(onClick = onReject) {
+            OutlinedButton(onClick = {
+                actionHandled = true
+                onReject()
+            }) {
                 Text("拒绝")
             }
         }

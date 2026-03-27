@@ -22,7 +22,8 @@ import com.timemotion.remotehelp.core.shouldShowVerificationRequestDialog
 fun VerificationRequestDialogHost(
     uiState: RemoteHelpUiState,
     onAcceptRequest: () -> Unit,
-    onRejectRequest: () -> Unit
+    onRejectRequest: () -> Unit,
+    onLocationPermissionChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     var locationPermissionGranted by remember {
@@ -37,6 +38,9 @@ fun VerificationRequestDialogHost(
         locationPermissionGranted =
             permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (uiState.side == DeviceSide.HELPER) {
+            onLocationPermissionChanged(locationPermissionGranted)
+        }
         if (pendingVerificationAccept) {
             pendingVerificationAccept = false
             if (locationPermissionGranted) {
@@ -52,6 +56,12 @@ fun VerificationRequestDialogHost(
         }
     }
 
+    androidx.compose.runtime.LaunchedEffect(locationPermissionGranted, uiState.side) {
+        if (uiState.side == DeviceSide.HELPER) {
+            onLocationPermissionChanged(locationPermissionGranted)
+        }
+    }
+
     if (
         uiState.side == DeviceSide.HELPER &&
         uiState.isVerificationRequestVisible &&
@@ -60,6 +70,7 @@ fun VerificationRequestDialogHost(
     ) {
         VerificationRequestDialog(
             session = uiState.activeSession,
+            expiresAt = uiState.activeSession.expiresAt,
             locationPermissionGranted = locationPermissionGranted,
             onRequestLocationPermission = {
                 runCatching {
@@ -75,6 +86,9 @@ fun VerificationRequestDialogHost(
             },
             onAccept = {
                 if (locationPermissionGranted) {
+                    if (uiState.side == DeviceSide.HELPER) {
+                        onLocationPermissionChanged(true)
+                    }
                     runCatching { onAcceptRequest() }
                         .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "接受验证请求失败") }
                 } else {

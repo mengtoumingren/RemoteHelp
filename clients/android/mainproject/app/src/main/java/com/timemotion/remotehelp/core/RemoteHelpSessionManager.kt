@@ -1,5 +1,6 @@
 package com.timemotion.remotehelp.core
 
+import android.os.Handler
 import com.timemotion.remotehelp.remote.RemoteControlController
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -11,8 +12,13 @@ class RemoteHelpSessionManager(
     private val configureCallController: (ActiveHelpSession) -> Unit,
     private val configureRemoteController: (ActiveHelpSession) -> Unit,
     private val ensureVerificationRoomConnected: () -> Unit,
-    private val cancelHelperWaitTimeout: () -> Unit
+    private val cancelHelperWaitTimeout: () -> Unit,
+    private val mainHandler: Handler
 ) {
+    private var pendingInviteLinkBuildRunnable: Runnable? = null
+    private var pendingInvitePayload: HelpInvitePayload? = null
+    private var pendingInviteBuildStartedAt: Long = 0L
+
     fun updateElderName(value: String) {
         uiState.value = uiState.value.copy(elderName = value)
     }
@@ -39,6 +45,7 @@ class RemoteHelpSessionManager(
     }
 
     fun consumeInvite(raw: String) {
+        cancelPendingInviteLinkBuild()
         HelpLinkCodec.parse(raw).onSuccess { payload ->
             callController.leaveRoom()
             remoteController.disconnect()
@@ -95,7 +102,7 @@ class RemoteHelpSessionManager(
         cancelHelperWaitTimeout()
         callController.leaveRoom()
         val now = System.currentTimeMillis()
-        val (payload, token) = HelpLinkCodec.createInvite(
+        val payload = HelpLinkCodec.createInvitePayload(
             helperName = state.helperName,
             elderName = state.elderName,
             elderPhone = phone,
@@ -109,8 +116,8 @@ class RemoteHelpSessionManager(
             elderPhone = payload.elderPhone,
             createdAt = payload.createdAt,
             expiresAt = payload.expiresAt,
-            inviteToken = token,
-            deepLink = HelpLinkCodec.buildDeepLink(token, payload.sessionId),
+            inviteToken = "",
+            deepLink = "",
             stage = HelpStage.REQUEST_CREATED
         )
         uiState.value = state.copy(
@@ -120,7 +127,7 @@ class RemoteHelpSessionManager(
             activeSession = session,
             side = DeviceSide.HELPER,
             currentScreen = AppScreen.SESSION,
-            bannerMessage = "协助请求已生成，正在等待对方认证短信链接",
+            bannerMessage = "协助请求已生成，正在连接房间",
             helperLocationPermissionGranted = false,
             helperLocationSummary = null,
             helperLocationUpdatedAt = null
@@ -128,6 +135,7 @@ class RemoteHelpSessionManager(
         historyManager.savePendingHelperSession(session)
         configureCallController(session)
         ensureVerificationRoomConnected()
+        waitForVerificationRoomReadyThenBuildInvite(session.requestId, payload)
     }
 
     fun applyRecentContact(contact: RecentContact) {
@@ -196,4 +204,64 @@ class RemoteHelpSessionManager(
             dashboardPage = page
         )
     }
+
+    private fun waitForVerificationRoomReadyThenBuildInvite(sessionId: String, payload: HelpInvitePayload) {
+        cancelPendingInviteLinkBuild()
+        pendingInvitePayload = payload
+        pendingInviteBuildStartedAt = System.currentTimeMillis()
+        pendingInviteLinkBuildRunnable = object : Runnable {
+            override fun run() {
+                val currentSession = uiState.value.activeSession
+                val currentSessionId = currentSession?.requestId
+                if (
+                    currentSessionId != sessionId ||
+                    uiState.value.side != DeviceSide.HELPER ||
+                    uiState.value.currentScreen != AppScreen.SESSION
+                ) {
+                    cancelPendingInviteLinkBuild()
+                    return
+                }
+                val callState = callController.uiState.value
+                if (callState.isInRoom) {
+                    val payloadSnapshot = pendingInvitePayload ?: payload
+                    val token = HelpLinkCodec.encode(payloadSnapshot)
+                    val sessionWithLink = currentSession.copy(
+                        inviteToken = token,
+                        deepLink = HelpLinkCodec.buildDeepLink(token, payloadSnapshot.sessionId)
+                    )
+                    historyManager.savePendingHelperSession(sessionWithLink)
+                    uiState.value = uiState.value.copy(
+                        activeSession = sessionWithLink,
+                        bannerMessage = "协助请求已生成，正在等待对方认证短信链接"
+                    )
+                    cancelPendingInviteLinkBuild()
+                    return
+                }
+                val elapsed = System.currentTimeMillis() - pendingInviteBuildStartedAt
+                if (elapsed >= PENDING_INVITE_ROOM_TIMEOUT_MS) {
+                    cancelPendingInviteLinkBuild()
+                    callController.leaveRoom()
+                    historyManager.clearPendingHelperSession()
+                    uiState.value = uiState.value.copy(
+                        activeSession = null,
+                        currentScreen = AppScreen.DASHBOARD,
+                        bannerMessage = "房间创建失败，请重试"
+                    )
+                    return
+                }
+                mainHandler.postDelayed(this, PENDING_INVITE_POLL_INTERVAL_MS)
+            }
+        }
+        mainHandler.post(pendingInviteLinkBuildRunnable!!)
+    }
+
+    private fun cancelPendingInviteLinkBuild() {
+        pendingInviteLinkBuildRunnable?.let(mainHandler::removeCallbacks)
+        pendingInviteLinkBuildRunnable = null
+        pendingInvitePayload = null
+        pendingInviteBuildStartedAt = 0L
+    }
 }
+
+private const val PENDING_INVITE_POLL_INTERVAL_MS = 200L
+private const val PENDING_INVITE_ROOM_TIMEOUT_MS = 15_000L

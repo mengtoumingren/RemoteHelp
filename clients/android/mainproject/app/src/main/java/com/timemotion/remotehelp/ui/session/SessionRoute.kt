@@ -39,10 +39,12 @@ import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.core.formatDateTime
 import com.timemotion.remotehelp.core.formatRemaining
 import com.timemotion.remotehelp.ui.shared.VerificationRequestDialogHost
+import kotlinx.coroutines.delay
 
 @Composable
 fun SessionRoute(viewModel: SessionViewModel) {
     val uiState by viewModel.uiState.collectAsState()
+    val callState by viewModel.callState.collectAsState()
     val context = LocalContext.current
     val side = uiState.side
     val session = uiState.activeSession
@@ -50,7 +52,8 @@ fun SessionRoute(viewModel: SessionViewModel) {
     VerificationRequestDialogHost(
         uiState = uiState,
         onAcceptRequest = viewModel::acceptVerificationRequest,
-        onRejectRequest = viewModel::rejectVerificationRequest
+        onRejectRequest = viewModel::rejectVerificationRequest,
+        onLocationPermissionChanged = viewModel::updateHelperLocationPermissionGranted
     )
     var currentTime by remember(session?.requestId, session?.expiresAt) {
         mutableStateOf(System.currentTimeMillis())
@@ -65,6 +68,26 @@ fun SessionRoute(viewModel: SessionViewModel) {
                 break
             }
             kotlinx.coroutines.delay(1000L)
+        }
+    }
+
+    LaunchedEffect(
+        session?.requestId,
+        session?.expiresAt,
+        callState.isInRoom,
+        callState.isConnecting,
+        side
+    ) {
+        val activeSession = session ?: return@LaunchedEffect
+        if (side != DeviceSide.HELPER) {
+            return@LaunchedEffect
+        }
+        if (activeSession.isExpired()) {
+            return@LaunchedEffect
+        }
+        if (!callState.isInRoom && !callState.isConnecting) {
+            viewModel.reconnectCurrentSessionRoom()
+            delay(250L)
         }
     }
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
@@ -119,11 +142,19 @@ fun SessionRoute(viewModel: SessionViewModel) {
                         SessionInfoLine("协助对象", "${it.elderName} · ${it.elderPhone}")
                         SessionInfoLine("剩余有效期", formatRemaining(it.expiresAt, currentTime))
                         if (side == DeviceSide.HELPER) {
-                            SessionLinkPreviewLine("短信链接", it.deepLink)
-                            Button(onClick = { viewModel.onSendSms(context) }, modifier = Modifier.fillMaxWidth()) {
+                            SessionLinkPreviewLine("短信链接", it.deepLink.ifBlank { "房间连接中，稍后自动生成" })
+                            Button(
+                                onClick = { viewModel.onSendSms(context) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = it.deepLink.isNotBlank()
+                            ) {
                                 Text("发送短信")
                             }
-                            OutlinedButton(onClick = { viewModel.onCopyLink(context) }, modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { viewModel.onCopyLink(context) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = it.deepLink.isNotBlank()
+                            ) {
                                 Text("复制短信链接")
                             }
                             Text("对方完成短信认证后，将自动进入视频验证。", color = Color(0xFF526277))

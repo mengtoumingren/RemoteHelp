@@ -11,7 +11,7 @@ import com.timemotion.remotehelp.core.DeviceSide
 import com.timemotion.remotehelp.core.RemoteHelpCoordinator
 import com.timemotion.remotehelp.core.RemoteHelpUiState
 import com.timemotion.remotehelp.core.SIGNAL_HELPER_LOCATION
-import com.timemotion.remotehelp.core.readLatestLocationSnapshot
+import com.timemotion.remotehelp.core.readRealtimeLocationSnapshot
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
@@ -43,7 +43,7 @@ fun HelperLocationSignalHost(
             latestUiState.activeSession?.verificationAcceptedAt != null
         ) {
             val locationSummary = runCatching {
-                context.readLatestLocationSnapshot()?.toSummary()
+                context.readRealtimeLocationSnapshot()?.toSummary()
             }.getOrElse {
                 AppLog.logThrowable("RemoteHelpApp", it, "读取协助方定位失败")
                 null

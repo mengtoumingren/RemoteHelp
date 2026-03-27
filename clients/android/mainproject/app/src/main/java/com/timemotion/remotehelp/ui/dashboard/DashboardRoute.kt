@@ -53,7 +53,8 @@ fun DashboardRoute(viewModel: DashboardViewModel) {
     VerificationRequestDialogHost(
         uiState = uiState,
         onAcceptRequest = viewModel::acceptVerificationRequest,
-        onRejectRequest = viewModel::rejectVerificationRequest
+        onRejectRequest = viewModel::rejectVerificationRequest,
+        onLocationPermissionChanged = viewModel::updateHelperLocationPermissionGranted
     )
     InvitePreviewDialogHost(
         uiState = uiState,

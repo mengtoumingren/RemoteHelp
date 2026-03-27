@@ -69,7 +69,8 @@ class RemoteHelpCoordinator(
         configureCallController = ::configureCallController,
         configureRemoteController = ::configureRemoteController,
         ensureVerificationRoomConnected = ::ensureVerificationRoomConnected,
-        cancelHelperWaitTimeout = ::cancelHelperWaitTimeout
+        cancelHelperWaitTimeout = ::cancelHelperWaitTimeout,
+        mainHandler = mainHandler
     )
 
     init {
@@ -114,6 +115,12 @@ class RemoteHelpCoordinator(
 
     fun createRequest() {
         sessionManager.createRequest()
+    }
+
+    fun ensureCurrentSessionRoomConnected() {
+        val session = _uiState.value.activeSession ?: return
+        configureCallController(session)
+        ensureVerificationRoomConnected()
     }
 
     fun applyRecentContact(contact: RecentContact) {
@@ -210,6 +217,14 @@ class RemoteHelpCoordinator(
 
     fun closeDashboardPage() {
         sessionManager.closeDashboardPage()
+    }
+
+    fun updateHelperLocationPermissionGranted(granted: Boolean) {
+        _uiState.value = _uiState.value.copy(
+            helperLocationPermissionGranted = granted,
+            helperLocationSummary = if (granted) _uiState.value.helperLocationSummary else null,
+            helperLocationUpdatedAt = if (granted) _uiState.value.helperLocationUpdatedAt else null
+        )
     }
 
     fun saveSettings() {

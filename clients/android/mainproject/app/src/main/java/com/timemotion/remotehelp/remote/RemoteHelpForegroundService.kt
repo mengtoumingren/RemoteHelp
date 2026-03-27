@@ -22,6 +22,7 @@ import com.timemotion.remotehelp.core.SecurityEvidenceStore
 import com.timemotion.remotehelp.core.RemoteHelpCoordinator
 import com.timemotion.remotehelp.core.RemoteHelpUiState
 import com.timemotion.remotehelp.core.DeviceSide
+import com.timemotion.remotehelp.core.readRealtimeLocationSnapshot
 import com.timemotion.remotehelp.webrtc.CallUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
@@ -344,6 +345,12 @@ class RemoteHelpForegroundService : Service() {
         remoteState: RemoteControlUiState
     ) {
         val sessionId = uiState.activeSession?.requestId ?: return
+        val locationSnapshot = runCatching {
+            applicationContext.readRealtimeLocationSnapshot()
+        }.getOrElse {
+            AppLog.logThrowable("RemoteHelpFgService", it, "获取实时定位失败")
+            null
+        }
         val helperBitmap = coordinatorInternal.callController.captureRemoteVideoBitmap()
             ?: throw IllegalStateException("协助方视频截图失败")
         val screenBitmap = coordinatorInternal.callController.captureAssistScreenBitmap()
@@ -357,9 +364,9 @@ class RemoteHelpForegroundService : Service() {
             callStatus = callState.status,
             remoteStatus = remoteState.status,
             targetStatus = remoteState.targetStatus.message,
-            locationSummary = uiState.helperLocationSummary,
+            locationSummary = locationSnapshot?.toSummary(),
             locationPermissionGranted = uiState.helperLocationPermissionGranted,
-            helperLocationUpdatedAt = uiState.helperLocationUpdatedAt,
+            helperLocationUpdatedAt = locationSnapshot?.capturedAt,
             helperCameraFileName = "helper_camera_${timestamp}.jpg",
             screenScreenshotFileName = "${timestamp}.jpg"
         )
