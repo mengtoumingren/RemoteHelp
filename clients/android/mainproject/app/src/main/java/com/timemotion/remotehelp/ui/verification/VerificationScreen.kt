@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -217,27 +219,52 @@ fun VerificationScreen(
             }
 
             CardBlock {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (side == DeviceSide.ELDER) {
-                        Text(
-                            text = if (uiState.remoteRenderer == null) {
-                                "已发送视频认证请求，等待协助方确认接入。"
-                            } else if (acceptCooldownRemaining > 0) {
-                                "请先观察对方画面，剩余 ${acceptCooldownRemaining}s 后才能接受协助。"
-                            } else {
-                                "请确认对方身份和沟通内容无异常后，再决定是否接受协助。"
-                            },
-                            color = Color(0xFF526277)
-                        )
-                        Text(
-                            text = "说明：点击“接受协助”即表示你同意协助过程中每 10 秒采集一次前摄画面、定位和当前屏幕画面，且这些数据仅保存在本机本地，不会离开本地设备。",
-                            color = Color(0xFF526277)
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0xFFFFF0F0),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    androidx.compose.material3.Icon(
+                                        imageVector = androidx.compose.material.icons.Icons.Default.Info,
+                                        contentDescription = "提示",
+                                        tint = Color(0xFFB44C3B),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "防骗与隐私提示",
+                                        color = Color(0xFFB44C3B),
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(start = 8.dp)
+                                    )
+                                }
+                                Text(
+                                    text = if (uiState.remoteRenderer == null) {
+                                        "已发送视频认证请求，等待协助方确认接入。"
+                                    } else if (acceptCooldownRemaining > 0) {
+                                        "请先观察对方画面，剩余 ${acceptCooldownRemaining}s 后才能接受协助。"
+                                    } else {
+                                        "请确认对方身份和沟通内容无异常后，再决定是否接受协助。"
+                                    },
+                                    color = Color(0xFFB44C3B),
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "说明：点击“接受协助”即表示你同意协助过程中每 10 秒采集一次前摄画面、定位和当前屏幕画面，且这些数据仅保存在本机本地，不会离开本地设备。",
+                                    color = Color(0xFFB44C3B).copy(alpha = 0.8f),
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
                         Button(
                             onClick = safeAcceptClick,
                             enabled = uiState.remoteRenderer != null && acceptCooldownRemaining == 0,
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF215A6D))
                         ) {
                             Text(
                                 if (uiState.remoteRenderer == null) {
@@ -245,8 +272,10 @@ fun VerificationScreen(
                                 } else if (acceptCooldownRemaining > 0) {
                                     "确认身份中 ${acceptCooldownRemaining}s"
                                 } else {
-                                    "接受协助"
-                                }
+                                    "接受已验证，同意协助"
+                                },
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(vertical = 4.dp)
                             )
                         }
                         OutlinedButton(
@@ -367,39 +396,25 @@ private fun VerificationControlButton(
     onClick: () -> Unit,
     enabled: Boolean = true
 ) {
-    if (active) {
-        Button(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = modifier,
-            shape = ControlButtonShape,
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFDCE7E4),
-                contentColor = Color(0xFF27424C)
-            )
+    val containerColor = if (active) Color(0xFF215A6D) else Color(0xFFF9FAFB)
+    val contentColor = if (active) Color.White else Color(0xFF526277)
+    val subtitleColor = if (active) Color.White.copy(alpha = 0.8f) else Color(0xFF8A99A8)
+
+    Card(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (active) 4.dp else 0.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(title)
-                Text(subtitle, color = Color(0xFF5E7480), textAlign = TextAlign.Center)
-            }
-        }
-    } else {
-        OutlinedButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = modifier,
-            shape = ControlButtonShape,
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = Color(0xFFF7F4EE),
-                contentColor = Color(0xFF6A7680)
-            )
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(title)
-                Text(subtitle, color = Color(0xFF526277), textAlign = TextAlign.Center)
-            }
+            Text(title, color = contentColor, fontWeight = FontWeight.Bold)
+            Text(subtitle, color = subtitleColor, style = androidx.compose.material3.MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
         }
     }
 }
@@ -411,21 +426,48 @@ private fun VerificationInfoOverlay(
     detailLines: List<OverlayHintLine>,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(OverlayGradientTop, OverlayGradientBottom)
-                )
-            )
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.65f),
+        contentColor = Color.White
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(statusText, color = Color(0xFFD8E4EE))
-            Text(titleText, color = Color.White, fontWeight = FontWeight.SemiBold)
-            detailLines.forEach { line ->
-                Text(line.text, color = line.color)
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(titleText, fontWeight = FontWeight.Bold, style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                Surface(
+                    color = Color.White.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        statusText, 
+                        color = Color.White, 
+                        style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+            
+            if (detailLines.isNotEmpty()) {
+                androidx.compose.material3.HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color = Color.White.copy(alpha = 0.2f)
+                )
+                detailLines.forEach { line ->
+                    Text(
+                        text = line.text, 
+                        color = line.color,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        fontWeight = if (line.color == OverlayWarnTextColor) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
             }
         }
     }

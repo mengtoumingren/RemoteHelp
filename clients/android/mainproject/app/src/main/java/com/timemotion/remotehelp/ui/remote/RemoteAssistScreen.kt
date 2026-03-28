@@ -233,26 +233,38 @@ private fun AssistTopOverlay(
     subtitle: String,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+    Surface(
+        color = Color(0x80000000),
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.padding(12.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(Color.Green, RoundedCornerShape(4.dp))
+                    .padding(end = 8.dp)
             )
-            Text(
-                text = subtitle,
-                color = Color(0xFFD6E1EA),
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    color = Color(0xFFE0E0E0),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

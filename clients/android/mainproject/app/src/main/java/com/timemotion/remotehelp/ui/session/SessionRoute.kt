@@ -12,10 +12,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -171,8 +174,9 @@ fun SessionRoute(viewModel: SessionViewModel) {
 @Composable
 private fun SessionBannerCard(message: String, onDismiss: () -> Unit) {
     Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF183153))
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF0F0)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Row(
             modifier = Modifier
@@ -181,15 +185,32 @@ private fun SessionBannerCard(message: String, onDismiss: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = message,
-                color = Color.White,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
+                    .weight(1f)
                     .padding(end = 12.dp)
-                    .fillMaxWidth(0.72f)
-            )
-            OutlinedButton(onClick = onDismiss) {
-                Text("关闭")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = Color(0xFFB44C3B),
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                Text(
+                    text = message,
+                    color = Color(0xFFB44C3B),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            OutlinedButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB44C3B))
+            ) {
+                Text("关闭", style = MaterialTheme.typography.labelMedium)
             }
         }
     }
@@ -202,10 +223,11 @@ private fun SessionCard(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFCF8))
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Box(modifier = Modifier.padding(18.dp)) {
+        Box(modifier = Modifier.padding(24.dp)) {
             content()
         }
     }
@@ -213,22 +235,28 @@ private fun SessionCard(
 
 @Composable
 private fun SessionInfoLine(label: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = label, color = Color(0xFF526277))
-        Text(text = value, color = Color(0xFF183153), fontWeight = FontWeight.Medium)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = label, color = Color(0xFF8A99A8), style = MaterialTheme.typography.labelMedium)
+        Text(text = value, color = Color(0xFF183153), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
     }
 }
 
 @Composable
 private fun SessionLinkPreviewLine(label: String, value: String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(text = label, color = Color(0xFF526277))
-        Text(
-            text = value,
-            color = Color(0xFF526277),
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+        Text(text = label, color = Color(0xFF8A99A8), style = MaterialTheme.typography.labelMedium)
+        Surface(
+            color = Color(0xFFF9FAFB),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = value,
+                color = Color(0xFF526277),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

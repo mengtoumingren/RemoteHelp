@@ -14,9 +14,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,11 +60,11 @@ fun LogBrowserPage(
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var selectedContent by remember { mutableStateOf("") }
 
+    var showLogDetailDialog by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         logFiles = AppLog.listLogFiles(context)
-        selectedFileName = selectedFileName?.takeIf { current ->
-            logFiles.any { it.fileName == current }
-        } ?: logFiles.firstOrNull()?.fileName
+        selectedFileName = null // 默认不选中，只有点击后才去读取
     }
 
     LaunchedEffect(selectedFileName) {
@@ -68,6 +75,7 @@ fun LogBrowserPage(
         selectedContent = withContext(Dispatchers.IO) {
             AppLog.readLogFile(context, fileName)
         }
+        showLogDetailDialog = true // 获取到内容后打开弹窗
     }
 
     Surface(
@@ -78,160 +86,120 @@ fun LogBrowserPage(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "日志页面",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "点击文件预览内容",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                OutlinedButton(onClick = onDismiss) {
-                    Text("返回")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.padding(end = 8.dp)) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = androidx.compose.ui.graphics.Color(0xFF183153))
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "运行日志",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = androidx.compose.ui.graphics.Color(0xFF183153)
+                        )
+                        Text(
+                            text = "点击文件列表预览诊断内容",
+                            color = androidx.compose.ui.graphics.Color(0xFF526277),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
 
             if (logFiles.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
-                    Text("当前没有日志文件", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("当前没有已保存的日志文件", color = androidx.compose.ui.graphics.Color(0xFF526277), style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
             } else {
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    if (maxWidth < 640.dp) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                contentPadding = PaddingValues(vertical = 2.dp)
-                            ) {
-                                items(logFiles, key = { it.fileName }) { file ->
-                                    LogFileRow(
-                                        file = file,
-                                        selected = file.fileName == selectedFileName,
-                                        timeFormat = timeFormat,
-                                        onClick = { selectedFileName = file.fileName }
-                                    )
-                                }
-                            }
-
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Text(
-                                    text = selectedFileName ?: "未选择日志",
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                OutlinedTextField(
-                                    value = selectedContent,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 220.dp, max = 420.dp),
-                                    minLines = 10,
-                                    label = { Text("日志内容") }
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Button(
-                                        onClick = {
-                                            if (selectedContent.isNotBlank()) {
-                                                clipboardManager.setText(AnnotatedString(selectedContent))
-                                            }
-                                        },
-                                        enabled = selectedContent.isNotBlank()
-                                    ) {
-                                        Text("复制日志")
-                                    }
-                                    OutlinedButton(onClick = onDismiss) {
-                                        Text("返回")
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        val listWidth = 280.dp
-                        val detailWidth = (maxWidth - listWidth - 14.dp).coerceAtLeast(0.dp)
-                        Row(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            LazyColumn(
-                                modifier = Modifier
-                                    .width(listWidth)
-                                    .fillMaxSize(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                contentPadding = PaddingValues(vertical = 2.dp)
-                            ) {
-                                items(logFiles, key = { it.fileName }) { file ->
-                                    LogFileRow(
-                                        file = file,
-                                        selected = file.fileName == selectedFileName,
-                                        timeFormat = timeFormat,
-                                        onClick = { selectedFileName = file.fileName }
-                                    )
-                                }
-                            }
-
-                            Column(
-                                modifier = Modifier
-                                    .width(detailWidth)
-                                    .fillMaxSize(),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Text(
-                                    text = selectedFileName ?: "未选择日志",
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                OutlinedTextField(
-                                    value = selectedContent,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 220.dp, max = 520.dp),
-                                    minLines = 10,
-                                    label = { Text("日志内容") }
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Button(
-                                        onClick = {
-                                            if (selectedContent.isNotBlank()) {
-                                                clipboardManager.setText(AnnotatedString(selectedContent))
-                                            }
-                                        },
-                                        enabled = selectedContent.isNotBlank()
-                                    ) {
-                                        Text("复制日志")
-                                    }
-                                    OutlinedButton(onClick = onDismiss) {
-                                        Text("返回")
-                                    }
-                                }
-                            }
-                        }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp)
+                ) {
+                    items(logFiles, key = { it.fileName }) { file ->
+                        LogFileRow(
+                            file = file,
+                            selected = false,
+                            timeFormat = timeFormat,
+                            onClick = { selectedFileName = file.fileName }
+                        )
                     }
                 }
             }
         }
+    }
+
+    if (showLogDetailDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showLogDetailDialog = false
+                selectedFileName = null
+            },
+            title = {
+                Text(
+                    text = selectedFileName ?: "日志详情",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = androidx.compose.ui.graphics.Color(0xFF183153)
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = selectedContent,
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 500.dp),
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedContent.isNotBlank()) {
+                            clipboardManager.setText(AnnotatedString(selectedContent))
+                        }
+                    },
+                    enabled = selectedContent.isNotBlank(),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFF215A6D))
+                ) {
+                    Text("复制内容", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        showLogDetailDialog = false
+                        selectedFileName = null
+                    },
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                ) {
+                    Text("关闭", color = androidx.compose.ui.graphics.Color(0xFF526277))
+                }
+            },
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+            containerColor = androidx.compose.ui.graphics.Color.White
+        )
     }
 }
 
@@ -246,22 +214,35 @@ private fun LogFileRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant
-        )
+            containerColor = if (selected) androidx.compose.ui.graphics.Color(0xFF215A6D)
+            else androidx.compose.ui.graphics.Color.White
+        ),
+        elevation = if (selected) CardDefaults.cardElevation(4.dp) else CardDefaults.cardElevation(0.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(file.fileName, fontWeight = FontWeight.SemiBold)
-            Text(
-                text = "${timeFormat.format(file.lastModified)} · ${formatSize(file.sizeBytes)}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = if (selected) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color(0xFF526277),
+                modifier = Modifier.padding(end = 12.dp)
             )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = file.fileName, 
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color(0xFF183153)
+                )
+                Text(
+                    text = "${timeFormat.format(file.lastModified)} · ${formatSize(file.sizeBytes)}",
+                    color = if (selected) androidx.compose.ui.graphics.Color(0xFFE5ECF6) else androidx.compose.ui.graphics.Color(0xFF8A99A8),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }

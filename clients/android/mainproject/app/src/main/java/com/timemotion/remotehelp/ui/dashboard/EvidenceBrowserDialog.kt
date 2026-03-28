@@ -1,6 +1,10 @@
 package com.timemotion.remotehelp.ui.dashboard
 
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -18,10 +22,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -85,50 +95,61 @@ fun EvidenceBrowserPage(
     }
 
     Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(12.dp),
-        shape = MaterialTheme.shapes.extraLarge,
-        tonalElevation = 6.dp
+        modifier = Modifier.fillMaxSize(),
+        color = androidx.compose.ui.graphics.Color(0xFFF6EFE3)
     ) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item {
-                BrowserHeader(
-                    sessionCount = sessions.size,
-                    recordCount = sessions.sumOf { session ->
-                        recordsBySession[session.sessionId].orEmpty().size
-                    },
-                    onDismiss = onDismiss
-                )
-            }
-
-            if (sessions.isEmpty()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 40.dp, bottom = 20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "当前没有证据文件",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    BrowserHeader(
+                        sessionCount = sessions.size,
+                        recordCount = sessions.sumOf { session ->
+                            recordsBySession[session.sessionId].orEmpty().size
+                        },
+                        onDismiss = onDismiss
+                    )
+                }
+
+                if (sessions.isEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 40.dp, bottom = 20.dp),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(40.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "当前没有留痕证据记录",
+                                    color = androidx.compose.ui.graphics.Color(0xFF526277),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(sessions, key = { it.sessionId }) { session ->
+                        SessionCard(
+                            session = session,
+                            records = recordsBySession[session.sessionId].orEmpty(),
+                            timeFormat = timeFormat,
+                            onOpenSession = { selectedSession = session }
                         )
                     }
-                }
-            } else {
-                items(sessions, key = { it.sessionId }) { session ->
-                    SessionCard(
-                        session = session,
-                        records = recordsBySession[session.sessionId].orEmpty(),
-                        timeFormat = timeFormat,
-                        onOpenSession = { selectedSession = session }
-                    )
                 }
             }
         }
@@ -171,28 +192,35 @@ private fun BrowserHeader(
     recordCount: Int,
     onDismiss: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "证据页面",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Button(
-                onClick = onDismiss,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text("返回")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onDismiss, modifier = Modifier.padding(end = 8.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack, 
+                        contentDescription = "返回", 
+                        tint = androidx.compose.ui.graphics.Color(0xFF183153)
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "留痕证据",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = androidx.compose.ui.graphics.Color(0xFF183153)
+                    )
+                    Text(
+                        text = "共 $sessionCount 次协助，记录 $recordCount 条数据",
+                        color = androidx.compose.ui.graphics.Color(0xFF526277),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         }
-        Text(
-            text = "会话 $sessionCount 个，记录 $recordCount 条",
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -208,20 +236,41 @@ private fun SessionCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onOpenSession),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = session.sessionId,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "会话 ID: ${session.sessionId.take(8)}...",
+                    fontWeight = FontWeight.Bold,
+                    color = androidx.compose.ui.graphics.Color(0xFF183153),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Surface(
+                    color = androidx.compose.ui.graphics.Color(0xFFE5ECF6),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "${records.size} 条记录",
+                        color = androidx.compose.ui.graphics.Color(0xFF215A6D),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
             Text(
                 text = buildString {
                     if (session.helperName.isNotBlank()) append(session.helperName)
@@ -229,20 +278,14 @@ private fun SessionCard(
                         if (isNotBlank()) append(" · ")
                         append(session.elderName)
                     }
-                    if (isNotBlank()) append(" · ")
-                    append("记录 ")
-                    append(records.size)
-                    append(" 条")
                 },
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = androidx.compose.ui.graphics.Color(0xFF526277),
+                style = MaterialTheme.typography.bodyMedium
             )
             Text(
                 text = "最后留痕：$lastCapturedText",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "点击进入会话记录",
-                color = MaterialTheme.colorScheme.primary
+                color = androidx.compose.ui.graphics.Color(0xFF8A99A8),
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }
@@ -267,55 +310,69 @@ private fun SessionRecordsDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 860.dp)
-                    .padding(12.dp),
-                shape = MaterialTheme.shapes.extraLarge,
-                tonalElevation = 8.dp
+                    .padding(20.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                color = androidx.compose.ui.graphics.Color.White,
+                shadowElevation = 8.dp
             ) {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     item {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(
-                                        text = "会话记录",
-                                        style = MaterialTheme.typography.headlineSmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = session.sessionId,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Button(
-                                    onClick = onDismiss,
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                                ) {
-                                    Text("返回")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = onDismiss, modifier = Modifier.padding(end = 4.dp)) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowBack,
+                                            contentDescription = "返回",
+                                            tint = androidx.compose.ui.graphics.Color(0xFF183153)
+                                        )
+                                    }
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            text = "会话记录明细",
+                                            style = MaterialTheme.typography.titleLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = androidx.compose.ui.graphics.Color(0xFF183153)
+                                        )
+                                        Text(
+                                            text = "ID: ${session.sessionId.take(12)}...",
+                                            color = androidx.compose.ui.graphics.Color(0xFF8A99A8),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
                                 }
                             }
-                            Text(
-                                text = buildString {
-                                    if (session.helperName.isNotBlank()) append(session.helperName)
-                                    if (session.elderName.isNotBlank()) {
+                            Surface(
+                                color = androidx.compose.ui.graphics.Color(0xFFF9FAFB),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = buildString {
+                                        if (session.helperName.isNotBlank()) append(session.helperName)
+                                        if (session.elderName.isNotBlank()) {
+                                            if (isNotBlank()) append(" 协助 ")
+                                            append(session.elderName)
+                                        }
                                         if (isNotBlank()) append(" · ")
-                                        append(session.elderName)
-                                    }
-                                    if (isNotBlank()) append(" · ")
-                                    append("共 ")
-                                    append(records.size)
-                                    append(" 条记录")
-                                },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                                        append("共 ")
+                                        append(records.size)
+                                        append(" 条记录")
+                                    },
+                                    color = androidx.compose.ui.graphics.Color(0xFF526277),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
                         }
                     }
 
@@ -328,8 +385,8 @@ private fun SessionRecordsDialog(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "该会话下没有记录",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = "该会话下没有详细记录",
+                                    color = androidx.compose.ui.graphics.Color(0xFF8A99A8)
                                 )
                             }
                         }
@@ -387,64 +444,62 @@ private fun RecordCard(
     val screenshotFile = remember(session.sessionId, record.screenScreenshotFileName) {
         store.resolveScreenScreenshotFile(session.sessionId, record.screenScreenshotFileName)
     }
-    val overviewText = buildString {
-        append("概览：")
-        append(record.callStatus)
-        append(" · ")
-        append(record.remoteStatus)
-        append(" · ")
-        append(record.targetStatus)
-        record.locationSummary?.let {
-            append(" · 协助方定位 ")
-            append(it)
-        }
-    }
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenRecord),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color(0xFFF9FAFB)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFFE5ECF6))
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = timeFormat.format(Date(record.capturedAt)),
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = buildString {
-                    append("记录 #")
-                    append(index + 1)
-                    append(" · ")
-                    append(record.callStatus)
-                    append(" · ")
-                    append(record.remoteStatus)
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = overviewText,
-                modifier = Modifier.clickable(onClick = onOpenRecord),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = buildString {
-                    append("定位权限：")
-                    append(if (record.locationPermissionGranted) "已开启" else "未开启")
-                    record.helperLocationUpdatedAt?.let {
-                        append(" · 最近定位 ")
-                        append(timeFormat.format(Date(it)))
-                    }
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "记录 #${index + 1}",
+                    fontWeight = FontWeight.Bold,
+                    color = androidx.compose.ui.graphics.Color(0xFF183153),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = timeFormat.format(Date(record.capturedAt)),
+                    color = androidx.compose.ui.graphics.Color(0xFF8A99A8),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            
+            Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                color = androidx.compose.ui.graphics.Color.White,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "概览：${record.callStatus} · ${record.remoteStatus} · ${record.targetStatus}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.ui.graphics.Color(0xFF526277)
+                    )
+                    Text(
+                        text = buildString {
+                            append("定位授权：")
+                            append(if (record.locationPermissionGranted) "已开启" else "未开启")
+                            record.locationSummary?.let {
+                                append(" · ")
+                                append(it)
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (record.locationPermissionGranted) androidx.compose.ui.graphics.Color(0xFF215A6D) else androidx.compose.ui.graphics.Color(0xFFB44C3B)
+                    )
+                }
+            }
+
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val thumbnailGap = 10.dp
+                val thumbnailGap = 12.dp
                 val thumbnailWidth = (maxWidth - thumbnailGap) / 2
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -452,16 +507,16 @@ private fun RecordCard(
                 ) {
                     EvidenceThumbnailCard(
                         modifier = Modifier.width(thumbnailWidth),
-                        label = "协助方摄像头缩略图",
+                        label = "协助方摄像头",
                         file = helperCameraFile,
-                        hint = "点击查看大图",
+                        hint = "查看大图",
                         onClick = { onOpenHelperImage(helperCameraFile) }
                     )
                     EvidenceThumbnailCard(
                         modifier = Modifier.width(thumbnailWidth),
-                        label = "当前屏幕缩略图",
+                        label = "屏幕截图",
                         file = screenshotFile,
-                        hint = "点击查看大图",
+                        hint = "查看大图",
                         onClick = { onOpenScreenImage(screenshotFile) }
                     )
                 }
@@ -496,90 +551,126 @@ private fun RecordDetailDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 680.dp)
-                    .padding(12.dp),
-                shape = MaterialTheme.shapes.extraLarge,
-                tonalElevation = 10.dp
+                    .padding(20.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                color = androidx.compose.ui.graphics.Color.White,
+                shadowElevation = 8.dp
             ) {
-                Column(
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "记录详情",
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = timeFormat.format(Date(selection.record.capturedAt)),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Button(
-                            onClick = onDismiss,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("关闭")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = onDismiss, modifier = Modifier.padding(end = 4.dp)) {
+                                    Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = androidx.compose.ui.graphics.Color(0xFF183153))
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        text = "证据记录详情",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = androidx.compose.ui.graphics.Color(0xFF183153)
+                                    )
+                                    Text(
+                                        text = timeFormat.format(Date(selection.record.capturedAt)),
+                                        color = androidx.compose.ui.graphics.Color(0xFF8A99A8),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+
+                        Surface(
+                            color = androidx.compose.ui.graphics.Color(0xFFF9FAFB),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(16.dp)) {
+                                EvidenceMetaLine("会话 ID", selection.session.sessionId)
+                                EvidenceMetaLine("记录序号", "第 ${selection.index + 1} 条")
+                                EvidenceMetaLine("通话状态", selection.record.callStatus)
+                                EvidenceMetaLine("控制状态", selection.record.remoteStatus)
+                                EvidenceMetaLine("终端状态", selection.record.targetStatus)
+                                EvidenceMetaLine("定位信息", selection.record.locationSummary ?: "未记录")
+                                EvidenceMetaLine("定位权限", if (selection.record.locationPermissionGranted) "已开启" else "未开启", highlight = true)
+                            }
                         }
                     }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        EvidenceMetaLine("会话", selection.session.sessionId)
-                        EvidenceMetaLine("记录", "第 ${selection.index + 1} 条")
-                        EvidenceMetaLine("状态", "${selection.record.callStatus} · ${selection.record.remoteStatus} · ${selection.record.targetStatus}")
-                        EvidenceMetaLine(
-                            "定位",
-                            selection.record.locationSummary ?: "无"
+                    item {
+                        OutlinedTextField(
+                            value = detailText,
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 150.dp, max = 220.dp),
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            label = { Text("原始 JSON 数据") }
                         )
-                        EvidenceMetaLine(
-                            "定位权限",
-                            if (selection.record.locationPermissionGranted) "已开启" else "未开启"
-                        )
+                        OutlinedButton(
+                            onClick = { clipboardManager.setText(AnnotatedString(detailText)) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                        ) {
+                            Text("复制原始数据", fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFF215A6D))
+                        }
                     }
 
-                    OutlinedTextField(
-                        value = detailText,
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 150.dp, max = 220.dp),
-                        minLines = 7,
-                        label = { Text("原始数据") }
-                    )
-
-                    OutlinedButton(
-                        onClick = { clipboardManager.setText(AnnotatedString(detailText)) }
-                    ) {
-                        Text("复制原始数据")
+                    item {
+                        EvidenceImageCard(
+                            label = "协助方摄像头截图",
+                            file = helperCameraFile,
+                            hint = "点击放大查看",
+                            maxImageHeight = 220.dp
+                        ) {
+                            onOpenImage(ImageSelection("协助方摄像头截图", helperCameraFile))
+                        }
                     }
-
-                    EvidenceImageCard(
-                        label = "协助方摄像头截图",
-                        file = helperCameraFile,
-                        hint = "点击缩略图放大",
-                        maxImageHeight = 200.dp
-                    ) {
-                        onOpenImage(ImageSelection("协助方摄像头截图", helperCameraFile))
-                    }
-                    EvidenceImageCard(
-                        label = "当前屏幕截图",
-                        file = screenshotFile,
-                        hint = "点击缩略图放大",
-                        maxImageHeight = 200.dp
-                    ) {
-                        onOpenImage(ImageSelection("当前屏幕截图", screenshotFile))
+                    
+                    item {
+                        EvidenceImageCard(
+                            label = "当前屏幕截图",
+                            file = screenshotFile,
+                            hint = "点击放大查看",
+                            maxImageHeight = 220.dp
+                        ) {
+                            onOpenImage(ImageSelection("当前屏幕截图", screenshotFile))
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EvidenceMetaLine(label: String, value: String, highlight: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, color = androidx.compose.ui.graphics.Color(0xFF526277), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = value, 
+            fontWeight = FontWeight.Bold, 
+            color = if (highlight) androidx.compose.ui.graphics.Color(0xFF215A6D) else androidx.compose.ui.graphics.Color(0xFF183153),
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(0.7f),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End
+        )
     }
 }
 
@@ -590,48 +681,49 @@ private fun ImagePreviewDialog(
 ) {
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true, dismissOnClickOutside = true)
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = androidx.compose.ui.graphics.Color(0xFF0B0F14)
+            color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.95f)
         ) {
-            var scale by remember(selection.file.absolutePath) { mutableStateOf(1f) }
-            var offset by remember(selection.file.absolutePath) { mutableStateOf(Offset.Zero) }
-            var imageBitmap by remember(selection.file.absolutePath) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-            var fileExists by remember(selection.file.absolutePath) { mutableStateOf(selection.file.exists()) }
+            Box(modifier = Modifier.fillMaxSize()) {
+                var scale by remember(selection.file.absolutePath) { mutableStateOf(1f) }
+                var offset by remember(selection.file.absolutePath) { mutableStateOf(Offset.Zero) }
+                var imageBitmap by remember(selection.file.absolutePath) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+                var fileExists by remember(selection.file.absolutePath) { mutableStateOf(selection.file.exists()) }
 
-            LaunchedEffect(selection.file.absolutePath) {
-                fileExists = selection.file.exists()
-                imageBitmap = if (fileExists) {
-                    withContext(Dispatchers.IO) {
-                        runCatching {
-                            BitmapFactory.decodeFile(selection.file.absolutePath)?.asImageBitmap()
-                        }.getOrNull()
-                    }
-                } else {
-                    null
+                LaunchedEffect(selection.file.absolutePath) {
+                    fileExists = selection.file.exists()
+                    imageBitmap = if (fileExists) {
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                BitmapFactory.decodeFile(selection.file.absolutePath)?.asImageBitmap()
+                            }.getOrNull()
+                        }
+                    } else null
+                    scale = 1f
+                    offset = Offset.Zero
                 }
-                scale = 1f
-                offset = Offset.Zero
-            }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(12.dp),
-                contentAlignment = Alignment.Center
-            ) {
                 if (fileExists && imageBitmap != null) {
                     Image(
                         bitmap = imageBitmap!!,
-                        contentDescription = null,
+                        contentDescription = selection.title,
                         modifier = Modifier
                             .fillMaxSize()
+                            .padding(horizontal = 8.dp, vertical = 40.dp)
                             .pointerInput(selection.file.absolutePath) {
                                 detectTransformGestures { _, pan, zoom, _ ->
                                     scale = (scale * zoom).coerceIn(1f, 6f)
-                                    offset += pan
+                                    val panLimitX = (scale - 1) * size.width / 2f
+                                    val panLimitY = (scale - 1) * size.height / 2f
+                                    val targetOffsetX = offset.x + pan.x
+                                    val targetOffsetY = offset.y + pan.y
+                                    offset = Offset(
+                                        x = targetOffsetX.coerceIn(-panLimitX, panLimitX),
+                                        y = targetOffsetY.coerceIn(-panLimitY, panLimitY)
+                                    )
                                 }
                             }
                             .graphicsLayer(
@@ -639,13 +731,42 @@ private fun ImagePreviewDialog(
                                 scaleY = scale,
                                 translationX = offset.x,
                                 translationY = offset.y
-                            ),
+                            )
+                            .clickable(onClick = onDismiss),
                         contentScale = ContentScale.Fit
                     )
                 } else {
                     Text(
-                        text = "图片文件不存在或无法读取",
-                        color = androidx.compose.ui.graphics.Color.White
+                        text = "图片无法加载",
+                        color = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                // Top Action Bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 20.dp)
+                        .align(Alignment.TopCenter),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.3f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "关闭", tint = androidx.compose.ui.graphics.Color.White)
+                    }
+                    Text(
+                        text = selection.title,
+                        color = androidx.compose.ui.graphics.Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
             }
@@ -699,34 +820,49 @@ private fun EvidenceImageCard(
     Card(
         modifier = Modifier
             .then(modifier)
+            .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color(0xFFF9FAFB)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(text = label, fontWeight = FontWeight.SemiBold)
-            if (fileExists && imageBitmap != null) {
-                Image(
-                    bitmap = imageBitmap!!,
-                    contentDescription = label,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = maxImageHeight),
-                    contentScale = ContentScale.Fit
-                )
-            } else {
-                Text(
-                    text = "图片文件不存在或无法读取：${file.name}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Text(text = label, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFF183153), style = MaterialTheme.typography.titleMedium)
+            
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 100.dp, max = maxImageHeight),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                color = androidx.compose.ui.graphics.Color.Black
+            ) {
+                if (fileExists && imageBitmap != null) {
+                    Image(
+                        bitmap = imageBitmap!!,
+                        contentDescription = label,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "图片文件不存在或无法读取：${file.name}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                }
             }
+            
             Text(
                 text = hint,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = androidx.compose.ui.graphics.Color(0xFF8A99A8),
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }
