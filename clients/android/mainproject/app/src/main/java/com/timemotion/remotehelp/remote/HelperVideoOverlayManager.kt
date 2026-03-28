@@ -38,7 +38,7 @@ class HelperVideoOverlayManager(
     @Volatile
     private var previewImageView: ImageView? = null
     @Volatile
-    private var speakerButton: ImageButton? = null
+    private var speakerButton: Button? = null
     @Volatile
     private var speakerEnabled: Boolean = true
     @Volatile
@@ -78,13 +78,9 @@ class HelperVideoOverlayManager(
     fun updateSpeakerState(enabled: Boolean) {
         speakerEnabled = enabled
         val button = speakerButton ?: return
-        val iconRes = if (enabled) {
-            android.R.drawable.ic_lock_silent_mode_off
-        } else {
-            android.R.drawable.ic_lock_silent_mode
-        }
+        val textStr = if (enabled) "外放" else "听筒"
         val apply = Runnable {
-            button.setImageResource(iconRes)
+            button.text = textStr
             button.background = GradientDrawable().apply {
                 cornerRadius = dp(8).toFloat()
                 setColor(if (enabled) 0xCC1F2937.toInt() else 0xCC374151.toInt())
@@ -133,8 +129,8 @@ class HelperVideoOverlayManager(
                 clipToOutline = true
             }
             isClickable = true
-            minimumWidth = dp(60)
-            minimumHeight = dp(170)
+            minimumWidth = dp(76)
+            minimumHeight = dp(184)
             setOnTapListener { openApp() }
             setOnDragListener { newX, newY, params ->
                 params.x = newX.coerceIn(0, appContext.resources.displayMetrics.widthPixels)
@@ -144,10 +140,24 @@ class HelperVideoOverlayManager(
                 }
             }
         }
+        val bgContainer = LinearLayout(appContext).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(0xCC1A212A.toInt())
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                clipToOutline = true
+                elevation = dp(8).toFloat()
+            }
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+
         val previewContainer = FrameLayout(appContext).apply {
             background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(android.graphics.Color.TRANSPARENT)
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFF2A3644.toInt())
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 clipToOutline = true
@@ -166,62 +176,67 @@ class HelperVideoOverlayManager(
             )
         )
         previewImageView = preview
-        root.addView(
+        bgContainer.addView(
             previewContainer,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(80)
-            )
+                dp(100)
+            ).apply {
+                bottomMargin = dp(4)
+            }
         )
-        val speakerToggle = ImageButton(appContext).apply {
-            setImageResource(
-                if (speakerEnabled) {
-                    android.R.drawable.ic_lock_silent_mode_off
-                } else {
-                    android.R.drawable.ic_lock_silent_mode
-                }
-            )
-            scaleType = ImageView.ScaleType.CENTER
-            imageTintList = ColorStateList.valueOf(android.graphics.Color.WHITE)
+        val speakerToggle = Button(appContext).apply {
+            text = if (speakerEnabled) "外放" else "听筒"
+            isAllCaps = false
+            textSize = 12f
+            minHeight = 0
+            minWidth = 0
+            setPadding(0, 0, 0, 0)
+            includeFontPadding = false
+            setTextColor(android.graphics.Color.WHITE)
             background = GradientDrawable().apply {
-                cornerRadius = dp(8).toFloat()
-                setColor(if (speakerEnabled) 0xCC1F2937.toInt() else 0xCC374151.toInt())
-                setStroke(dp(1), if (speakerEnabled) 0x33FFFFFF else 0x22FFFFFF)
+                cornerRadius = dp(10).toFloat()
+                setColor(if (speakerEnabled) 0x66436182.toInt() else 0x4426364A.toInt())
             }
             setOnClickListener { onToggleSpeakerClick() }
         }
         speakerButton = speakerToggle
-        root.addView(
+        bgContainer.addView(
             speakerToggle,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(40)
+                dp(36)
             ).apply {
-                topMargin = dp(5)
-                bottomMargin = dp(5)
+                bottomMargin = dp(4)
             }
         )
         val hangUpButton = Button(appContext).apply {
             text = "挂断"
             isAllCaps = false
-            textSize = 12f
+            textSize = 11f
             minHeight = 0
             minWidth = 0
-            setPadding(dp(5), 0, dp(5), 0)
+            setPadding(0, 0, 0, 0)
             includeFontPadding = false
             setTextColor(android.graphics.Color.WHITE)
             background = GradientDrawable().apply {
-                cornerRadius = dp(8).toFloat()
+                cornerRadius = dp(10).toFloat()
                 setColor(0xFFD32F2F.toInt())
-                setStroke(dp(1), 0x55FFCDD2)
             }
             setOnClickListener { onHangUpClick() }
         }
-        root.addView(
+        bgContainer.addView(
             hangUpButton,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(40)
+                dp(36)
+            )
+        )
+        root.addView(
+            bgContainer,
+            LinearLayout.LayoutParams(
+                dp(76),
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -243,8 +258,8 @@ class HelperVideoOverlayManager(
             gravity = Gravity.TOP or Gravity.END
             x = dp(6)
             y = dp(6)
-            width = dp(60)
-            height = dp(170)
+            width = dp(76)
+            height = dp(184)
         }
         paramsRef = params
         windowManager.addView(root, params)

@@ -1,6 +1,7 @@
 package com.timemotion.remotehelp.ui.remote
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -115,10 +116,11 @@ fun RemoteAssistScreen(
             Scaffold(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Brush.verticalGradient(listOf(Color(0xFF0E1724), Color(0xFF17283B), Color(0xFF23384D))))
+                    .background(Color(0xFF122030))
                     .systemBarsPadding(),
+                containerColor = Color.Transparent,
                 bottomBar = {
-                    Box(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                         HelperAssistBottomBar(
                             onSendText = onSendText,
                             onSendBackspace = onSendBackspace,
@@ -244,37 +246,44 @@ private fun AssistTopOverlay(
     subtitle: String,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        color = Color(0x80000000),
-        shape = RoundedCornerShape(12.dp),
-        modifier = modifier.padding(12.dp)
+    Box(
+        modifier = modifier.padding(16.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Surface(
+            color = Color(0xB31F2937),
+            shape = RoundedCornerShape(16.dp),
+            shadowElevation = 8.dp,
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF))
         ) {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .background(Color(0xFF4CAF50), RoundedCornerShape(5.dp))
-            )
-            androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(10.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Pulse dot
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .background(Color(0xFF00E676), RoundedCornerShape(6.dp))
+                        .border(2.dp, Color(0x4000E676), RoundedCornerShape(6.dp))
                 )
-                Text(
-                    text = subtitle,
-                    color = Color(0xFFB0BEC5),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(12.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = subtitle,
+                        color = Color(0xB3FFFFFF),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -350,13 +359,14 @@ private fun HelperAssistBottomBar(
     modifier: Modifier = Modifier
 ) {
     var keyboardEnabled by rememberSaveable { mutableStateOf(false) }
-    Box(
-        modifier = modifier
-            .background(Color(0xFF122030))
-            .padding(vertical = 10.dp, horizontal = 12.dp),
-        contentAlignment = Alignment.Center
+    Surface(
+        modifier = modifier,
+        color = Color(0xCC1F2937),
+        shape = RoundedCornerShape(24.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF))
     ) {
         Column(
+            modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (keyboardEnabled) {
@@ -368,32 +378,28 @@ private fun HelperAssistBottomBar(
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val itemWidth = 60.dp
-                val itemGap = 8.dp
                 AssistFloatingButton(
                     title = "返回",
                     icon = Icons.AutoMirrored.Filled.ArrowBack,
                     onClick = onSendBack,
                     modifier = Modifier.width(itemWidth)
                 )
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "桌面",
                     icon = Icons.Filled.Home,
                     onClick = onSendHome,
                     modifier = Modifier.width(itemWidth)
                 )
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "菜单",
                     icon = Icons.Filled.Menu,
                     onClick = onSendRecents,
                     modifier = Modifier.width(itemWidth)
                 )
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "输入",
                     icon = Icons.Filled.Edit,
@@ -401,23 +407,22 @@ private fun HelperAssistBottomBar(
                     onClick = { keyboardEnabled = !keyboardEnabled },
                     modifier = Modifier.width(itemWidth)
                 )
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 Box(
                     modifier = Modifier.wrapContentSize(Alignment.TopEnd)
                 ) {
-                    OutlinedButton(
+                    Button(
                         onClick = onOpenMore,
                         modifier = Modifier.width(itemWidth),
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color(0x22324458),
-                            contentColor = Color(0xFFE8EFF6)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0x33FFFFFF),
+                            contentColor = Color.White
                         )
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "更多", modifier = Modifier.size(20.dp).padding(bottom = 4.dp))
-                            Text("更多", fontSize = 11.sp)
+                            Text("更多", fontSize = 11.sp, maxLines = 1)
                         }
                     }
                     DropdownMenu(
