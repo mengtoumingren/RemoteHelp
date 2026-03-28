@@ -32,6 +32,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -239,28 +250,28 @@ private fun AssistTopOverlay(
         modifier = modifier.padding(12.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .background(Color.Green, RoundedCornerShape(4.dp))
-                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .background(Color(0xFF4CAF50), RoundedCornerShape(5.dp))
             )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = title,
                     color = Color.White,
-                    fontSize = 14.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = subtitle,
-                    color = Color(0xFFE0E0E0),
-                    fontSize = 11.sp,
+                    color = Color(0xFFB0BEC5),
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -360,28 +371,32 @@ private fun HelperAssistBottomBar(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val itemWidth = 56.dp
-                val itemGap = 6.dp
+                val itemWidth = 60.dp
+                val itemGap = 8.dp
                 AssistFloatingButton(
                     title = "返回",
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
                     onClick = onSendBack,
                     modifier = Modifier.width(itemWidth)
                 )
                 androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "桌面",
+                    icon = Icons.Filled.Home,
                     onClick = onSendHome,
                     modifier = Modifier.width(itemWidth)
                 )
                 androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
                     title = "菜单",
+                    icon = Icons.Filled.Menu,
                     onClick = onSendRecents,
                     modifier = Modifier.width(itemWidth)
                 )
                 androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(itemGap))
                 AssistFloatingButton(
-                    title = "键盘",
+                    title = "输入",
+                    icon = Icons.Filled.Edit,
                     active = keyboardEnabled,
                     onClick = { keyboardEnabled = !keyboardEnabled },
                     modifier = Modifier.width(itemWidth)
@@ -394,13 +409,16 @@ private fun HelperAssistBottomBar(
                         onClick = onOpenMore,
                         modifier = Modifier.width(itemWidth),
                         shape = RoundedCornerShape(14.dp),
-                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
                             containerColor = Color(0x22324458),
                             contentColor = Color(0xFFE8EFF6)
                         )
                     ) {
-                        Text("更多")
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "更多", modifier = Modifier.size(20.dp).padding(bottom = 4.dp))
+                            Text("更多", fontSize = 11.sp)
+                        }
                     }
                     DropdownMenu(
                         expanded = isMoreMenuVisible,
@@ -507,6 +525,7 @@ private fun sendTypedText(
 @Composable
 private fun AssistFloatingButton(
     title: String,
+    icon: ImageVector? = null,
     onClick: () -> Unit,
     active: Boolean = false,
     modifier: Modifier = Modifier
@@ -515,13 +534,18 @@ private fun AssistFloatingButton(
         onClick = onClick,
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 5.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (active) Color(0xFF7189A6) else Color(0x2CFFFFFF),
             contentColor = Color.White
         )
     ) {
-        Text(title)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            if (icon != null) {
+                Icon(icon, contentDescription = title, modifier = Modifier.size(20.dp).padding(bottom = 4.dp))
+            }
+            Text(title, fontSize = 11.sp, maxLines = 1)
+        }
     }
 }
 
@@ -545,15 +569,36 @@ private fun ElderAssistBody(
     ) {
         CardBlock {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("正在接受远程协助", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
-                Text("当前协助人：$controllerName", color = Color(0xFF526277))
-                Text("通知栏会显示当前正在协助您的人，误触退出后也可以从通知栏确认状态。", color = Color(0xFF526277))
-                Text(targetStatus, color = Color(0xFF526277))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Info, contentDescription = null, tint = Color(0xFF215A6D), modifier = Modifier.size(20.dp))
+                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(8.dp))
+                    Text("正在接受远程协助", fontWeight = FontWeight.Bold, color = Color(0xFF183153), fontSize = 16.sp)
+                }
+                androidx.compose.material3.HorizontalDivider(color = Color(0xFFEBEBEB), modifier = Modifier.padding(vertical = 4.dp))
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("协助人", color = Color(0xFF526277), fontSize = 14.sp)
+                    Text(controllerName, color = Color(0xFF183153), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                }
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("状态信息", color = Color(0xFF526277), fontSize = 14.sp)
+                    Text(targetStatus, color = Color(0xFF183153), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                }
+                Surface(
+                    color = Color(0xFFFFF8E1),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFA000), modifier = Modifier.size(16.dp))
+                        androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(6.dp))
+                        Text("通知栏会显示当前正在协助您的人，误触退出后也可以从通知栏确认状态。", color = Color(0xFFF57C00), fontSize = 12.sp, lineHeight = 18.sp)
+                    }
+                }
             }
         }
         PermissionStatusCard(
             title = "屏幕共享",
-            status = if (captureActive) "已开启" else "未开启",
+            isGranted = captureActive,
             description = if (captureActive) {
                 "对方已经能看到你的屏幕，接下来可以继续远程操作。"
             } else {
@@ -564,7 +609,7 @@ private fun ElderAssistBody(
         )
         PermissionStatusCard(
             title = "无障碍服务",
-            status = if (accessibilityEnabled) "已开启" else "未开启",
+            isGranted = accessibilityEnabled,
             description = if (accessibilityEnabled) {
                 "开启后对方才能替你点击、滑动和拖动。"
             } else {
@@ -575,7 +620,7 @@ private fun ElderAssistBody(
         )
         PermissionStatusCard(
             title = "协助悬浮窗",
-            status = if (overlayPermissionGranted) "已开启" else "未开启",
+            isGranted = overlayPermissionGranted,
             description = if (overlayPermissionGranted) {
                 "悬浮窗权限已具备，进入协助页后会自动显示远程协助图标，点击图标可回到 App。"
             } else {
@@ -586,32 +631,40 @@ private fun ElderAssistBody(
         )
         CardBlock {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("协助通道", fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = if (isConnected) Color(0xFF4CAF50) else Color(0xFF90A4AE), modifier = Modifier.size(20.dp))
+                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(8.dp))
+                    Text("协助控制通道", fontWeight = FontWeight.Bold, color = Color(0xFF183153), fontSize = 16.sp)
+                }
                 Text(
-                    text = if (isConnected) "协助通道已连接，完成上面的权限后就可以继续。" else "协助通道未连接，先连接后再开启权限。",
-                    color = Color(0xFF526277)
+                    text = if (isConnected) "指令通道已就绪，保持屏幕开启即可被协助。" else "指令通道未连接，部分机型需要手动点击连接。",
+                    color = Color(0xFF526277),
+                    fontSize = 14.sp
                 )
                 if (!isConnected) {
                     Button(
                         onClick = onConnectClick,
                         modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF183153),
+                            containerColor = Color(0xFF215A6D),
                             contentColor = Color.White
                         )
                     ) {
-                        Text("连接协助通道")
+                        Text("连接协助通道", fontWeight = FontWeight.Bold)
                     }
                 }
                 OutlinedButton(
                     onClick = onEndClick,
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = Color(0xFF183153)
-                    )
+                        containerColor = Color(0xFFFFF0F0),
+                        contentColor = Color(0xFFB44C3B)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33B44C3B))
                 ) {
-                    Text("结束本次协助")
+                    Text("结束本次协助", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -621,7 +674,7 @@ private fun ElderAssistBody(
 @Composable
 private fun PermissionStatusCard(
     title: String,
-    status: String,
+    isGranted: Boolean,
     description: String,
     buttonText: String,
     onClick: () -> Unit
@@ -634,18 +687,48 @@ private fun PermissionStatusCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(title, fontWeight = FontWeight.SemiBold, color = Color(0xFF183153))
-                Text(status, fontWeight = FontWeight.Medium, color = Color(0xFF526277))
+                Surface(
+                    color = if (isGranted) Color(0xFFE8F5E9) else Color(0xFFECEFF1),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (isGranted) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(14.dp))
+                        } else {
+                            Icon(Icons.Filled.Info, contentDescription = null, tint = Color(0xFF90A4AE), modifier = Modifier.size(14.dp))
+                        }
+                        Text(if (isGranted) "已开启" else "未开启", style = androidx.compose.material3.MaterialTheme.typography.labelMedium, color = if (isGranted) Color(0xFF2E7D32) else Color(0xFF546E7A))
+                    }
+                }
             }
-            Text(description, color = Color(0xFF526277))
-            OutlinedButton(
-                onClick = onClick,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color(0xFF183153)
-                )
-            ) {
-                Text(buttonText)
+            Text(description, color = Color(0xFF526277), fontSize = 13.sp)
+            if (!isGranted) {
+                Button(
+                    onClick = onClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF215A6D)
+                    )
+                ) {
+                    Text(buttonText)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = Color(0xFF183153)
+                    )
+                ) {
+                    Text(buttonText)
+                }
             }
         }
     }
