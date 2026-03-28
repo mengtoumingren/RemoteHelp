@@ -81,6 +81,10 @@ fun DashboardRoute(viewModel: DashboardViewModel) {
             uiState = uiState,
             onServerUrlChange = viewModel::updateServerUrl,
             onHelperNameChange = viewModel::updateHelperName,
+            onStunServerChange = viewModel::updateStunServer,
+            onTurnServerChange = viewModel::updateTurnServer,
+            onTurnUsernameChange = viewModel::updateTurnUsername,
+            onTurnPasswordChange = viewModel::updateTurnPassword,
             onSave = {
                 viewModel.saveSettings()
                 viewModel.closeDashboardPage()

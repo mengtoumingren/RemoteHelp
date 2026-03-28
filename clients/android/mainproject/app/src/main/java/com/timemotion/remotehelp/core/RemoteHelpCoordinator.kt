@@ -28,6 +28,10 @@ class RemoteHelpCoordinator(
         RemoteHelpUiState(
             serverUrl = ConnectionSettingsStore(appContext).loadServerUrl("ws://10.0.2.2:3000/ws"),
             helperName = ConnectionSettingsStore(appContext).loadHelperName("张三"),
+            stunServer = ConnectionSettingsStore(appContext).loadStunServer("stun:stun.timemotion.top:3478"),
+            turnServer = ConnectionSettingsStore(appContext).loadTurnServer(""),
+            turnUsername = ConnectionSettingsStore(appContext).loadTurnUsername(""),
+            turnPassword = ConnectionSettingsStore(appContext).loadTurnPassword(""),
             activeSession = restoredHelperSession,
             recentContacts = historyManager.loadRecentContacts(),
             history = historyManager.loadHistory(),
@@ -91,6 +95,22 @@ class RemoteHelpCoordinator(
 
     fun updateHelperName(value: String) {
         settingsManager.updateHelperName(value)
+    }
+
+    fun updateStunServer(value: String) {
+        settingsManager.updateStunServer(value)
+    }
+
+    fun updateTurnServer(value: String) {
+        settingsManager.updateTurnServer(value)
+    }
+
+    fun updateTurnUsername(value: String) {
+        settingsManager.updateTurnUsername(value)
+    }
+
+    fun updateTurnPassword(value: String) {
+        settingsManager.updateTurnPassword(value)
     }
 
     fun updateElderName(value: String) {

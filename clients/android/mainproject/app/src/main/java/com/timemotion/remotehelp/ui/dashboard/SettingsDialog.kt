@@ -47,6 +47,10 @@ fun SettingsPage(
     uiState: RemoteHelpUiState,
     onServerUrlChange: (String) -> Unit,
     onHelperNameChange: (String) -> Unit,
+    onStunServerChange: (String) -> Unit,
+    onTurnServerChange: (String) -> Unit,
+    onTurnUsernameChange: (String) -> Unit,
+    onTurnPasswordChange: (String) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
     onOpenLogs: () -> Unit,
@@ -134,7 +138,63 @@ fun SettingsPage(
                             ),
                             singleLine = true
                         )
-                        
+
+                        OutlinedTextField(
+                            value = uiState.stunServer,
+                            onValueChange = onStunServerChange,
+                            label = { Text("STUN 服务地址") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF215A6D),
+                                focusedLabelColor = Color(0xFF215A6D)
+                            ),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = uiState.turnServer,
+                            onValueChange = onTurnServerChange,
+                            label = { Text("TURN 服务地址 (可选)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF215A6D),
+                                focusedLabelColor = Color(0xFF215A6D)
+                            ),
+                            singleLine = true
+                        )
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = uiState.turnUsername,
+                                onValueChange = onTurnUsernameChange,
+                                label = { Text("TURN 用户名") },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF215A6D),
+                                    focusedLabelColor = Color(0xFF215A6D)
+                                ),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = uiState.turnPassword,
+                                onValueChange = onTurnPasswordChange,
+                                label = { Text("TURN 密码") },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF215A6D),
+                                    focusedLabelColor = Color(0xFF215A6D)
+                                ),
+                                singleLine = true
+                            )
+                        }
+
                         Surface(
                             color = Color(0xFFF1F5F9),
                             shape = RoundedCornerShape(12.dp),

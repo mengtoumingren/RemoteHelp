@@ -14,6 +14,10 @@ class DashboardViewModel(
 
     fun updateServerUrl(value: String) = coordinator.updateServerUrl(value)
     fun updateHelperName(value: String) = coordinator.updateHelperName(value)
+    fun updateStunServer(value: String) = coordinator.updateStunServer(value)
+    fun updateTurnServer(value: String) = coordinator.updateTurnServer(value)
+    fun updateTurnUsername(value: String) = coordinator.updateTurnUsername(value)
+    fun updateTurnPassword(value: String) = coordinator.updateTurnPassword(value)
     fun openSettings() = coordinator.openSettings()
     fun closeSettings() = coordinator.closeSettings()
     fun openLogs() = coordinator.openLogs()

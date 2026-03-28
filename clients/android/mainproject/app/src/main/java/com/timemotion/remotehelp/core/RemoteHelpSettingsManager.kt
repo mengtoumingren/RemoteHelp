@@ -13,6 +13,14 @@ class RemoteHelpSettingsManager(
 
     fun loadHelperName(defaultValue: String): String = settingsStore.loadHelperName(defaultValue)
 
+    fun loadStunServer(defaultValue: String): String = settingsStore.loadStunServer(defaultValue)
+
+    fun loadTurnServer(defaultValue: String): String = settingsStore.loadTurnServer(defaultValue)
+
+    fun loadTurnUsername(defaultValue: String): String = settingsStore.loadTurnUsername(defaultValue)
+
+    fun loadTurnPassword(defaultValue: String): String = settingsStore.loadTurnPassword(defaultValue)
+
     fun updateServerUrl(value: String) {
         uiState.value = uiState.value.copy(serverUrl = value)
     }
@@ -21,10 +29,30 @@ class RemoteHelpSettingsManager(
         uiState.value = uiState.value.copy(helperName = value)
     }
 
+    fun updateStunServer(value: String) {
+        uiState.value = uiState.value.copy(stunServer = value)
+    }
+
+    fun updateTurnServer(value: String) {
+        uiState.value = uiState.value.copy(turnServer = value)
+    }
+
+    fun updateTurnUsername(value: String) {
+        uiState.value = uiState.value.copy(turnUsername = value)
+    }
+
+    fun updateTurnPassword(value: String) {
+        uiState.value = uiState.value.copy(turnPassword = value)
+    }
+
     fun saveSettings() {
         settingsStore.save(
             serverUrl = uiState.value.serverUrl.trim(),
-            helperName = uiState.value.helperName.trim()
+            helperName = uiState.value.helperName.trim(),
+            stunServer = uiState.value.stunServer.trim(),
+            turnServer = uiState.value.turnServer.trim(),
+            turnUsername = uiState.value.turnUsername.trim(),
+            turnPassword = uiState.value.turnPassword.trim()
         )
         uiState.value = uiState.value.copy(
             bannerMessage = "设置已保存"

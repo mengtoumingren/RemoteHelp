@@ -52,6 +52,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.core.ConnectionSettingsStore
 import com.timemotion.remotehelp.remote.readDeviceScreenMetrics
 import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 import kotlinx.coroutines.flow.StateFlow
@@ -447,9 +448,27 @@ class CallController(
 
     private fun createPeerConnectionIfNeeded(): PeerConnection? {
         peerConnection?.let { return it }
-        val rtcConfig = PeerConnection.RTCConfiguration(
-            listOf(PeerConnection.IceServer.builder("stun:stun.timemotion.top:3478").createIceServer())
-        ).apply {
+
+        val settingsStore = ConnectionSettingsStore(context)
+        val stunServerUrl = settingsStore.loadStunServer("stun:stun.timemotion.top:3478")
+        val turnServerUrl = settingsStore.loadTurnServer("")
+        val turnUsername = settingsStore.loadTurnUsername("")
+        val turnPassword = settingsStore.loadTurnPassword("")
+
+        val iceServers = mutableListOf<PeerConnection.IceServer>()
+        if (stunServerUrl.isNotBlank()) {
+            iceServers.add(PeerConnection.IceServer.builder(stunServerUrl).createIceServer())
+        }
+        if (turnServerUrl.isNotBlank()) {
+            iceServers.add(
+                PeerConnection.IceServer.builder(turnServerUrl)
+                    .setUsername(turnUsername)
+                    .setPassword(turnPassword)
+                    .createIceServer()
+            )
+        }
+
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
