@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -50,7 +51,8 @@ fun UiFeedbackHost() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 40.dp, start = 16.dp, end = 16.dp),
+            .systemBarsPadding()
+            .padding(top = 8.dp, start = 16.dp, end = 16.dp),
         contentAlignment = Alignment.TopCenter
     ) {
         AnimatedVisibility(
