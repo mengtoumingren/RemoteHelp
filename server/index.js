@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const http = require("http");
 const crypto = require("crypto");
 const { WebSocket, WebSocketServer } = require("ws");
@@ -152,7 +152,7 @@ wss.on("connection", (socket) => {
       leaveWebRtcRoom(socket);
       const room = ensureWebRtcRoom(roomId);
       if (room.size >= 2) {
-        send(socket, { type: "error", message: "This demo only supports two peers per room" });
+        send(socket, { type: "error", message: "This room only supports two peers" });
         return;
       }
 
@@ -338,7 +338,6 @@ wss.on("connection", (socket) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Demo server listening on http://${HOST}:${PORT}`);
+  console.log(`RemoteHelp server listening on http://${HOST}:${PORT}`);
   console.log(`WebRTC STUN server: ${STUN_URL}`);
 });
-

@@ -1,30 +1,46 @@
-# WebRTC Demo Server
+﻿# 服务端说明
 
-## Start
+这是项目的联调信令服务，供主应用音视频验证和远程协助使用。
+
+更完整的项目说明请先看：
+
+- [使用文档](../docs/user-guide.md)
+- [技术文档](../docs/technical-guide.md)
+
+## 启动
 
 ```bash
 npm install
 npm run dev
 ```
 
-Default address: `http://0.0.0.0:3000`
+默认监听：
 
-WebSocket endpoint: `ws://<your-ip>:3000/ws`
+- `http://0.0.0.0:3000`
+- WebSocket：`ws://<your-ip>:3000/ws`
 
-Health check: `GET /health`
+## 接口
 
-ICE config: `GET /config`
+- `GET /health`
+- `GET /config`
 
-## Environment variables
+## 环境变量
 
 ```env
 PORT=3000
 HOST=0.0.0.0
 STUN_URL=stun:stun.timemotion.top:3478
+TURN_URL=turn:turn.timemotion.top:3478
 ```
 
-## Signaling events
+## WebSocket 事件
 
-- `join`: enter a room, max 2 peers
-- `signal`: forward `offer` / `answer` / `candidate`
-- `leave`: exit a room
+- `join`
+- `leave`
+- `signal`
+- `rc_join`
+- `rc_leave`
+- `rc_frame`
+- `rc_target_status`
+- `rc_command`
+- `rc_signal`
