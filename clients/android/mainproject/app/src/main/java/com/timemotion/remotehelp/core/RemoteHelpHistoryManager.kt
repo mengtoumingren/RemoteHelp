@@ -8,6 +8,7 @@ class RemoteHelpHistoryManager(context: Context) {
     fun loadRestoredHelperSession(): ActiveHelpSession? {
         return store.loadPendingHelperSession()
             ?.takeUnless { it.isExpired() }
+            ?.takeIf { it.channelToken.isNotBlank() }
             ?.copy(stage = HelpStage.REQUEST_CREATED, verificationAcceptedAt = null, endReason = null)
     }
 

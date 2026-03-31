@@ -31,6 +31,7 @@ class RemoteControlController(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val okHttpClient = okhttp3.OkHttpClient.Builder().build()
     private val signalClient = RemoteSignalClient(okHttpClient, ::onSignalEvent)
+    private var authToken: String = ""
 
     var onScreenShareStartRequested: ((Intent) -> Boolean)? = null
     var onScreenShareStopRequested: (() -> Unit)? = null
@@ -64,6 +65,10 @@ class RemoteControlController(
         _uiState.value = _uiState.value.copy(displayName = value)
     }
 
+    fun updateAuthToken(value: String) {
+        authToken = value.trim()
+    }
+
     fun selectRole(role: RemoteRole) {
         _uiState.value = _uiState.value.copy(selectedRole = role)
     }
@@ -74,12 +79,17 @@ class RemoteControlController(
             pushStatus("请填写服务地址和房间号")
             return
         }
+        if (authToken.isBlank()) {
+            pushStatus("缺少远控安全令牌，请重新生成协助请求")
+            return
+        }
         pushStatus("连接中")
         signalClient.connect(
             url = state.serverUrl.trim(),
             roomId = state.roomId.trim(),
             role = state.selectedRole,
-            displayName = state.displayName.trim().ifBlank { state.selectedRole.title }
+            displayName = state.displayName.trim().ifBlank { state.selectedRole.title },
+            authToken = authToken
         )
     }
 
@@ -532,3 +542,7 @@ private data class CaptureProfile(
 )
 
 private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
+
+
+
+

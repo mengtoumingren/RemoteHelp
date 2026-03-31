@@ -19,6 +19,7 @@ class LocalHistoryStore(context: Context) {
                 createdAt = item.optLong("createdAt"),
                 expiresAt = item.optLong("expiresAt"),
                 inviteToken = item.optString("inviteToken"),
+                channelToken = item.optString("channelToken"),
                 deepLink = item.optString("deepLink"),
                 stage = HelpStage.REQUEST_CREATED
             )
@@ -34,6 +35,7 @@ class LocalHistoryStore(context: Context) {
             .put("createdAt", session.createdAt)
             .put("expiresAt", session.expiresAt)
             .put("inviteToken", session.inviteToken)
+            .put("channelToken", session.channelToken)
             .put("deepLink", session.deepLink)
         preferences.edit().putString(KEY_PENDING_HELPER_SESSION, item.toString()).apply()
     }

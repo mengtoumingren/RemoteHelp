@@ -46,8 +46,13 @@ class RemoteHelpSettingsManager(
     }
 
     fun saveSettings() {
+        val serverUrl = uiState.value.serverUrl.trim()
+        if (!serverUrl.startsWith("ws://") && !serverUrl.startsWith("wss://")) {
+            uiState.value = uiState.value.copy(bannerMessage = "服务地址必须使用 ws:// 或 wss://")
+            return
+        }
         settingsStore.save(
-            serverUrl = uiState.value.serverUrl.trim(),
+            serverUrl = serverUrl,
             helperName = uiState.value.helperName.trim(),
             stunServer = uiState.value.stunServer.trim(),
             turnServer = uiState.value.turnServer.trim(),

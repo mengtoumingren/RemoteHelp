@@ -132,6 +132,8 @@ class CallController(
     private val assistFrameSinkLock = Any()
     private var assistFrameBuffer: VideoFrame.I420Buffer? = null
     private var remoteClientId: String? = null
+    private var authToken: String = ""
+    private var participantRole: String = "helper"
     private var isMakingOffer = false
     private var isLocalCaptureStarted = false
     private var areLocalTracksAttached = false
@@ -166,6 +168,14 @@ class CallController(
 
     fun updateDisplayName(value: String) {
         _uiState.value = _uiState.value.copy(displayName = value)
+    }
+
+    fun updateAuthToken(value: String) {
+        authToken = value.trim()
+    }
+
+    fun updateParticipantRole(value: String) {
+        participantRole = value.trim().ifBlank { "helper" }
     }
 
     fun setOfferInitiator(value: Boolean) {
@@ -233,6 +243,10 @@ class CallController(
                 setStatus("请填写服务地址和房间号")
                 return@runCatching
             }
+            if (authToken.isBlank()) {
+                setStatus("缺少安全链路令牌，请重新生成协助请求")
+                return@runCatching
+            }
             allowRtcReconnect = true
             cancelRtcReconnect()
             rtcReconnectAttempt = 0
@@ -244,7 +258,9 @@ class CallController(
             signalClient.connect(
                 url = _uiState.value.serverUrl.trim(),
                 roomId = _uiState.value.roomId.trim(),
-                displayName = _uiState.value.displayName.trim().ifBlank { "AndroidUser" }
+                displayName = _uiState.value.displayName.trim().ifBlank { "AndroidUser" },
+                role = participantRole,
+                authToken = authToken
             )
         }.onFailure {
             AppLog.logThrowable("CallController", it, "加入房间失败")
@@ -1342,3 +1358,9 @@ private class SyntheticVideoCapturer : VideoCapturer {
 }
 
 private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
+
+
+
+
+
+

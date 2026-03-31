@@ -54,6 +54,7 @@ data class ActiveHelpSession(
     val createdAt: Long,
     val expiresAt: Long,
     val inviteToken: String,
+    val channelToken: String = "",
     val deepLink: String,
     val stage: HelpStage = HelpStage.REQUEST_CREATED,
     val verificationAcceptedAt: Long? = null,

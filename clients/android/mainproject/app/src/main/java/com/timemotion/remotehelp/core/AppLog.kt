@@ -25,6 +25,15 @@ object AppLog {
     private val executor = Executors.newSingleThreadExecutor()
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.CHINA)
     private val fileDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
+    private val sensitivePatterns = listOf(
+        Regex("""(token=)([^&\s]+)""", RegexOption.IGNORE_CASE),
+        Regex("""(authToken[=:"]+)([^,\s"]+)""", RegexOption.IGNORE_CASE),
+        Regex("""(inviteToken[=:"]+)([^,\s"]+)""", RegexOption.IGNORE_CASE),
+        Regex("""(channelToken[=:"]+)([^,\s"]+)""", RegexOption.IGNORE_CASE),
+        Regex("""(turnPassword[=:"]+)([^,\s"]+)""", RegexOption.IGNORE_CASE),
+        Regex("""(elderPhone[=:"]+)([^,\s"]+)""", RegexOption.IGNORE_CASE),
+        Regex("""(ws <= ).+""", RegexOption.IGNORE_CASE)
+    )
 
     @Volatile
     private var appContext: Context? = null
@@ -54,21 +63,23 @@ object AppLog {
     }
 
     fun d(tag: String, message: String) {
-        Log.d(tag, message)
+        Log.d(tag, sanitize(message))
     }
 
     fun i(tag: String, message: String) {
-        Log.i(tag, message)
+        Log.i(tag, sanitize(message))
     }
 
     fun w(tag: String, message: String, throwable: Throwable? = null) {
-        Log.w(tag, message, throwable)
-        append("W", tag, message, throwable)
+        val sanitizedMessage = sanitize(message)
+        Log.w(tag, sanitizedMessage, throwable)
+        append("W", tag, sanitizedMessage, throwable)
     }
 
     fun e(tag: String, message: String, throwable: Throwable? = null) {
-        Log.e(tag, message, throwable)
-        append("E", tag, message, throwable)
+        val sanitizedMessage = sanitize(message)
+        Log.e(tag, sanitizedMessage, throwable)
+        append("E", tag, sanitizedMessage, throwable)
     }
 
     fun logThrowable(tag: String, throwable: Throwable, message: String? = null) {
@@ -139,7 +150,7 @@ object AppLog {
             append("] ")
             append(tag)
             append(": ")
-            append(message)
+            append(sanitize(message))
             if (throwable != null) {
                 appendLine()
                 append(stackTraceToString(throwable))
@@ -158,10 +169,20 @@ object AppLog {
         }
     }
 
+    private fun sanitize(value: String): String {
+        var sanitized = value
+        sensitivePatterns.forEach { pattern ->
+            sanitized = pattern.replace(sanitized) { match ->
+                "${match.groupValues[1]}[redacted]"
+            }
+        }
+        return sanitized
+    }
+
     private fun stackTraceToString(throwable: Throwable): String {
         val writer = StringWriter()
         throwable.printStackTrace(PrintWriter(writer))
-        return writer.toString()
+        return sanitize(writer.toString())
     }
 
     private fun resolveLogDirectory(context: Context): File {
@@ -169,5 +190,4 @@ object AppLog {
             ?: context.filesDir
         return File(baseDir, LOG_SUBDIR)
     }
-
 }

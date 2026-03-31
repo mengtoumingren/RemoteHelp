@@ -4,26 +4,34 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import com.timemotion.remotehelp.core.AppLog
 import com.timemotion.remotehelp.remote.RemoteControlController
 import com.timemotion.remotehelp.remote.RemoteRole
 import com.timemotion.remotehelp.webrtc.CallController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.OkHttpClient
 import org.json.JSONObject
 
 class RemoteHelpCoordinator(
     context: Context
 ) {
     private val appContext = context.applicationContext
+    private val coordinatorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     init {
         AppLog.install(appContext)
     }
+
     private val historyManager = RemoteHelpHistoryManager(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var helperWaitTimeoutRunnable: Runnable? = null
     private val restoredHelperSession = historyManager.loadRestoredHelperSession()
+    private val serverApiClient = ServerApiClient(OkHttpClient.Builder().build())
     private val _uiState = MutableStateFlow(
         RemoteHelpUiState(
             serverUrl = ConnectionSettingsStore(appContext).loadServerUrl("ws://10.0.2.2:3000/ws"),
@@ -70,11 +78,13 @@ class RemoteHelpCoordinator(
         historyManager = historyManager,
         callController = callController,
         remoteController = remoteController,
+        serverApiClient = serverApiClient,
         configureCallController = ::configureCallController,
         configureRemoteController = ::configureRemoteController,
         ensureVerificationRoomConnected = ::ensureVerificationRoomConnected,
         cancelHelperWaitTimeout = ::cancelHelperWaitTimeout,
-        mainHandler = mainHandler
+        mainHandler = mainHandler,
+        scope = coordinatorScope
     )
 
     init {
@@ -265,12 +275,15 @@ class RemoteHelpCoordinator(
 
     fun release() {
         assistManager.release()
+        coordinatorScope.cancel()
     }
 
     private fun configureCallController(session: ActiveHelpSession) {
         callController.updateServerUrl(_uiState.value.serverUrl.trim())
         callController.updateRoomId(session.verificationRoomId)
         callController.updateDisplayName(currentSideDisplayName(session))
+        callController.updateAuthToken(session.channelToken)
+        callController.updateParticipantRole(if (_uiState.value.side == DeviceSide.HELPER) "helper" else "elder")
         callController.setOfferInitiator(_uiState.value.side == DeviceSide.HELPER)
         callController.setRtcOfferAllowed(session.verificationAcceptedAt != null)
     }
@@ -279,6 +292,7 @@ class RemoteHelpCoordinator(
         remoteController.updateServerUrl(_uiState.value.serverUrl.trim())
         remoteController.updateRoomId(session.remoteRoomId)
         remoteController.updateDisplayName(currentSideDisplayName(session))
+        remoteController.updateAuthToken(session.channelToken)
         remoteController.selectRole(
             if (_uiState.value.side == DeviceSide.HELPER) {
                 RemoteRole.CONTROLLER

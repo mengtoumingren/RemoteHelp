@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const http = require("http");
 const crypto = require("crypto");
 const { WebSocket, WebSocketServer } = require("ws");
@@ -7,26 +7,169 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 const STUN_URL = process.env.STUN_URL || "stun:stun.timemotion.top:3478";
 const TURN_URL = process.env.TURN_URL || "turn:turn.timemotion.top:3478";
+const APP_BASE_URL = (process.env.APP_BASE_URL || "https://help.yourdomain.com").replace(/\/+$/, "");
+const TOKEN_SECRET = process.env.TOKEN_SECRET || "remotehelp-server-secret";
+const INVITE_TTL_MS = Number(process.env.INVITE_TTL_MS || 5 * 60 * 1000);
+const MAX_WS_MESSAGE_BYTES = Number(process.env.MAX_WS_MESSAGE_BYTES || 256 * 1024);
+const MAX_MESSAGES_PER_10S = Number(process.env.MAX_MESSAGES_PER_10S || 120);
+const MESSAGE_META_TTL_MS = Number(process.env.MESSAGE_META_TTL_MS || 2 * 60 * 1000);
 
 const app = express();
 app.use(express.json());
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, timestamp: Date.now() });
-});
-
-app.get("/config", (_req, res) => {
-  res.json({
-    wsUrlPath: "/ws",
-    iceServers: [{ urls: [STUN_URL, TURN_URL] }],
-  });
-});
-
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
-
+const inviteSessions = new Map();
 const webrtcRooms = new Map();
 const remoteControlRooms = new Map();
+
+function base64UrlEncode(value) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4);
+  return Buffer.from(padded, "base64").toString("utf8");
+}
+
+function signTokenPayload(payload) {
+  return crypto.createHmac("sha256", TOKEN_SECRET).update(payload).digest("hex");
+}
+
+function createSignedToken(payload) {
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  return `${encodedPayload}.${signTokenPayload(encodedPayload)}`;
+}
+
+function verifySignedToken(token) {
+  if (!token || typeof token !== "string") {
+    throw new Error("Missing token");
+  }
+  const parts = token.split(".");
+  if (parts.length !== 2) {
+    throw new Error("Invalid token format");
+  }
+  const [payloadPart, signaturePart] = parts;
+  const expectedSignature = signTokenPayload(payloadPart);
+  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+  const signatureBuffer = Buffer.from(signaturePart, "utf8");
+  if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+    throw new Error("Invalid token signature");
+  }
+  return JSON.parse(base64UrlDecode(payloadPart));
+}
+
+function sanitizeName(value, fallback) {
+  return String(value || "").trim() || fallback;
+}
+
+function sanitizePhone(value) {
+  return String(value || "").trim();
+}
+
+function buildDeepLink(token) {
+  return `${APP_BASE_URL}/r/${token}`;
+}
+
+function buildInvitePayload(helperName, elderName, elderPhone, now = Date.now()) {
+  const sessionId = `sess-${crypto.randomUUID().slice(0, 8)}`;
+  const expiresAt = now + INVITE_TTL_MS;
+  return {
+    inviteId: crypto.randomUUID(),
+    sessionId,
+    requestId: sessionId,
+    helperName: sanitizeName(helperName, "协助方"),
+    elderName: sanitizeName(elderName, "协助对象"),
+    elderPhone: sanitizePhone(elderPhone),
+    createdAt: now,
+    expiresAt,
+  };
+}
+
+function issueInvite(helperName, elderName, elderPhone, now = Date.now()) {
+  const payload = buildInvitePayload(helperName, elderName, elderPhone, now);
+  const helperToken = createSignedToken({
+    type: "channel",
+    audience: "helper",
+    roles: ["helper", "controller"],
+    requestId: payload.requestId,
+    sessionId: payload.sessionId,
+    createdAt: now,
+    expiresAt: payload.expiresAt,
+  });
+  const elderToken = createSignedToken({
+    type: "channel",
+    audience: "elder",
+    roles: ["elder", "target"],
+    requestId: payload.requestId,
+    sessionId: payload.sessionId,
+    createdAt: now,
+    expiresAt: payload.expiresAt,
+  });
+  const session = {
+    payload,
+    helperToken,
+    elderToken,
+    consumedAt: null,
+  };
+  inviteSessions.set(payload.requestId, session);
+  return session;
+}
+
+function getInviteSessionByToken(token, expectedAudience) {
+  const decoded = verifySignedToken(token);
+  if (decoded.type !== "channel") {
+    throw new Error("Invalid token type");
+  }
+  if (decoded.expiresAt <= Date.now()) {
+    throw new Error("Invite expired");
+  }
+  if (expectedAudience && decoded.audience !== expectedAudience) {
+    throw new Error("Unexpected invite audience");
+  }
+  const session = inviteSessions.get(decoded.requestId);
+  if (!session) {
+    throw new Error("Invite session not found");
+  }
+  const expectedToken = decoded.audience === "helper" ? session.helperToken : session.elderToken;
+  if (expectedToken !== token) {
+    throw new Error("Invite token revoked");
+  }
+  return { session, decoded };
+}
+
+function pruneExpiredInvites() {
+  const now = Date.now();
+  inviteSessions.forEach((session, requestId) => {
+    if (session.payload.expiresAt <= now) {
+      inviteSessions.delete(requestId);
+    }
+  });
+}
+
+function allowedRolesFromToken(decoded) {
+  return Array.isArray(decoded.roles) ? decoded.roles.map((role) => String(role)) : [];
+}
+
+function authenticateRoomAccess({ roomId, authToken, requiredRole }) {
+  const decoded = verifySignedToken(authToken);
+  if (decoded.type !== "channel") {
+    throw new Error("Invalid auth token type");
+  }
+  if (decoded.expiresAt <= Date.now()) {
+    throw new Error("Auth token expired");
+  }
+  if (decoded.requestId !== roomId || decoded.sessionId !== roomId) {
+    throw new Error("Auth token does not match room");
+  }
+  if (!allowedRolesFromToken(decoded).includes(requiredRole)) {
+    throw new Error("Auth token does not allow this role");
+  }
+  return decoded;
+}
 
 function send(socket, payload) {
   if (socket.readyState === WebSocket.OPEN) {
@@ -58,21 +201,18 @@ function leaveWebRtcRoom(socket) {
   if (!roomId || !clientId || !webrtcRooms.has(roomId)) {
     return;
   }
-
   const room = webrtcRooms.get(roomId);
   const departedPeer = room.get(clientId);
   room.delete(clientId);
-
   broadcastWebRtc(room, {
     type: "peer-left",
     clientId,
     displayName: departedPeer?.displayName || "",
+    role: departedPeer?.role || "",
   });
-
   if (room.size === 0) {
     webrtcRooms.delete(roomId);
   }
-
   socket.meta = null;
 }
 
@@ -112,10 +252,8 @@ function leaveRemoteControlRoom(socket) {
   if (!roomId || !clientId || !remoteControlRooms.has(roomId)) {
     return;
   }
-
   const room = remoteControlRooms.get(roomId);
   room.peers.delete(clientId);
-
   if (room.peers.size === 0) {
     remoteControlRooms.delete(roomId);
   } else {
@@ -124,54 +262,175 @@ function leaveRemoteControlRoom(socket) {
       peers: remotePeersPayload(room),
     });
   }
-
   socket.remoteMeta = null;
 }
+
+function getMessageMeta(message) {
+  if (!message || typeof message !== "object" || typeof message.meta !== "object" || message.meta === null) {
+    throw new Error("Missing message meta");
+  }
+  const issuedAt = Number(message.meta.issuedAt || 0);
+  const nonce = String(message.meta.nonce || "").trim();
+  const traceId = String(message.meta.traceId || "").trim();
+  if (!issuedAt || !nonce || !traceId) {
+    throw new Error("Invalid message meta");
+  }
+  if (Math.abs(Date.now() - issuedAt) > MESSAGE_META_TTL_MS) {
+    throw new Error("Expired message meta");
+  }
+  return { nonce };
+}
+
+function trackSocketMessageRate(socket) {
+  const now = Date.now();
+  socket.messageRateWindow = (socket.messageRateWindow || []).filter((timestamp) => now - timestamp < 10_000);
+  socket.messageRateWindow.push(now);
+  if (socket.messageRateWindow.length > MAX_MESSAGES_PER_10S) {
+    throw new Error("Too many messages");
+  }
+}
+
+function ensureUniqueNonce(socket, nonce) {
+  socket.seenNonces = socket.seenNonces || new Set();
+  if (socket.seenNonces.has(nonce)) {
+    throw new Error("Duplicate message nonce");
+  }
+  socket.seenNonces.add(nonce);
+  const timer = setTimeout(() => socket.seenNonces?.delete(nonce), MESSAGE_META_TTL_MS);
+  timer.unref?.();
+}
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, timestamp: Date.now() });
+});
+
+app.get("/config", (_req, res) => {
+  res.json({
+    wsUrlPath: "/ws",
+    iceServers: [{ urls: [STUN_URL, TURN_URL] }],
+    transportSecurity: {
+      enforceSecureTransport: true,
+      appBaseUrl: APP_BASE_URL,
+    },
+  });
+});
+
+app.post("/invites", (req, res) => {
+  try {
+    const elderPhone = sanitizePhone(req.body?.elderPhone);
+    if (!elderPhone) {
+      res.status(400).json({ ok: false, message: "elderPhone is required" });
+      return;
+    }
+    const invite = issueInvite(req.body?.helperName, req.body?.elderName, elderPhone);
+    res.json({
+      ok: true,
+      invite: {
+        requestId: invite.payload.requestId,
+        sessionId: invite.payload.sessionId,
+        helperName: invite.payload.helperName,
+        elderName: invite.payload.elderName,
+        elderPhone: invite.payload.elderPhone,
+        createdAt: invite.payload.createdAt,
+        expiresAt: invite.payload.expiresAt,
+        inviteToken: invite.elderToken,
+        channelToken: invite.helperToken,
+        deepLink: buildDeepLink(invite.elderToken),
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message || "Failed to create invite" });
+  }
+});
+
+app.post("/invites/resolve", (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const { session } = getInviteSessionByToken(token, "elder");
+    session.consumedAt = Date.now();
+    res.json({
+      ok: true,
+      invite: {
+        requestId: session.payload.requestId,
+        sessionId: session.payload.sessionId,
+        helperName: session.payload.helperName,
+        elderName: session.payload.elderName,
+        elderPhone: session.payload.elderPhone,
+        createdAt: session.payload.createdAt,
+        expiresAt: session.payload.expiresAt,
+        inviteToken: session.elderToken,
+        channelToken: session.elderToken,
+        deepLink: buildDeepLink(session.elderToken),
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message || "Failed to resolve invite" });
+  }
+});
+
+setInterval(pruneExpiredInvites, 30_000).unref();
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/ws", maxPayload: MAX_WS_MESSAGE_BYTES });
 
 wss.on("connection", (socket) => {
   socket.meta = null;
   socket.remoteMeta = null;
+  socket.messageRateWindow = [];
+  socket.seenNonces = new Set();
 
   socket.on("message", (raw) => {
+    if (raw.length > MAX_WS_MESSAGE_BYTES) {
+      send(socket, { type: "error", message: "Payload too large" });
+      return;
+    }
+
     let message;
     try {
+      trackSocketMessageRate(socket);
       message = JSON.parse(raw.toString());
-    } catch (_error) {
-      send(socket, { type: "error", message: "Invalid JSON payload" });
+    } catch (error) {
+      send(socket, { type: "error", message: error.message === "Too many messages" ? error.message : "Invalid JSON payload" });
       return;
     }
 
     if (message.type === "join") {
       const roomId = String(message.roomId || "").trim();
-      const displayName = String(message.displayName || "Anonymous").trim() || "Anonymous";
-      if (!roomId) {
-        send(socket, { type: "error", message: "roomId is required" });
+      const displayName = sanitizeName(message.displayName, "Anonymous");
+      const role = String(message.role || "").trim();
+      const authToken = String(message.authToken || "").trim();
+      if (!roomId || !["helper", "elder"].includes(role) || !authToken) {
+        send(socket, { type: "error", message: "Invalid join payload" });
         return;
       }
-
+      let auth;
+      try {
+        auth = authenticateRoomAccess({ roomId, authToken, requiredRole: role });
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "Join denied" });
+        return;
+      }
       leaveWebRtcRoom(socket);
       const room = ensureWebRtcRoom(roomId);
       if (room.size >= 2) {
         send(socket, { type: "error", message: "This room only supports two peers" });
         return;
       }
-
       const clientId = crypto.randomUUID();
-      socket.meta = { roomId, clientId, displayName };
-      room.set(clientId, { socket, displayName });
-
+      socket.meta = { roomId, clientId, displayName, role, sessionId: auth.sessionId };
+      room.set(clientId, { socket, displayName, role, sessionId: auth.sessionId });
       send(socket, {
         type: "joined",
         roomId,
         clientId,
         participants: Array.from(room.keys()),
       });
-
       broadcastWebRtc(room, {
         type: "peer-joined",
         roomId,
         clientId,
         displayName,
+        role,
       }, clientId);
       return;
     }
@@ -187,17 +446,28 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: "Join a room before sending signals" });
         return;
       }
-
+      if (message.roomId && String(message.roomId).trim() !== meta.roomId) {
+        send(socket, { type: "error", message: "roomId does not match active room" });
+        return;
+      }
+      try {
+        const { nonce } = getMessageMeta(message);
+        ensureUniqueNonce(socket, nonce);
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "Invalid signal meta" });
+        return;
+      }
       const room = webrtcRooms.get(meta.roomId);
       const envelope = {
         type: "signal",
         roomId: meta.roomId,
         fromClientId: meta.clientId,
         fromDisplayName: meta.displayName,
+        fromRole: meta.role,
         signalType: message.signalType,
         payload: message.payload || {},
+        meta: message.meta,
       };
-
       if (message.targetClientId) {
         const peer = room.get(message.targetClientId);
         if (peer && peer.socket.readyState === WebSocket.OPEN) {
@@ -211,13 +481,20 @@ wss.on("connection", (socket) => {
 
     if (message.type === "rc_join") {
       const roomId = String(message.roomId || "").trim();
-      const displayName = String(message.displayName || "Remote Device").trim() || "Remote Device";
+      const displayName = sanitizeName(message.displayName, "Remote Device");
       const role = String(message.role || "").trim();
-      if (!roomId || !["controller", "target"].includes(role)) {
+      const authToken = String(message.authToken || "").trim();
+      if (!roomId || !["controller", "target"].includes(role) || !authToken) {
         send(socket, { type: "error", message: "Invalid rc_join payload" });
         return;
       }
-
+      let auth;
+      try {
+        auth = authenticateRoomAccess({ roomId, authToken, requiredRole: role });
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "rc_join denied" });
+        return;
+      }
       leaveRemoteControlRoom(socket);
       const room = ensureRemoteControlRoom(roomId);
       const occupiedRole = Array.from(room.peers.values()).some((peer) => peer.role === role);
@@ -225,19 +502,16 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: `Room already has a ${role}` });
         return;
       }
-
       const clientId = crypto.randomUUID();
-      const peerRecord = { clientId, roomId, displayName, role, socket };
+      const peerRecord = { clientId, roomId, displayName, role, socket, sessionId: auth.sessionId };
       room.peers.set(clientId, peerRecord);
-      socket.remoteMeta = { clientId, roomId, displayName, role };
-
+      socket.remoteMeta = { clientId, roomId, displayName, role, sessionId: auth.sessionId };
       send(socket, {
         type: "rc_joined",
         clientId,
         peers: remotePeersPayload(room),
         targetStatus: room.lastTargetStatus,
       });
-
       broadcastRemoteRoom(room, {
         type: "rc_peer_update",
         peers: remotePeersPayload(room),
@@ -256,10 +530,16 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: "Only target can send rc_frame" });
         return;
       }
-
+      try {
+        const { nonce } = getMessageMeta(message);
+        ensureUniqueNonce(socket, nonce);
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "Invalid rc_frame meta" });
+        return;
+      }
       const room = remoteControlRooms.get(meta.roomId);
       room.lastFrame = message.frame || null;
-      broadcastRemoteRoom(room, { type: "rc_frame", frame: room.lastFrame }, meta.clientId);
+      broadcastRemoteRoom(room, { type: "rc_frame", frame: room.lastFrame, meta: message.meta }, meta.clientId);
       return;
     }
 
@@ -269,12 +549,19 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: "Only target can send rc_target_status" });
         return;
       }
-
+      try {
+        const { nonce } = getMessageMeta(message);
+        ensureUniqueNonce(socket, nonce);
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "Invalid rc_target_status meta" });
+        return;
+      }
       const room = remoteControlRooms.get(meta.roomId);
       room.lastTargetStatus = message.targetStatus || null;
       broadcastRemoteRoom(room, {
         type: "rc_target_status",
         targetStatus: room.lastTargetStatus,
+        meta: message.meta,
       }, meta.clientId);
       return;
     }
@@ -285,18 +572,24 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: "Only controller can send rc_command" });
         return;
       }
-
+      try {
+        const { nonce } = getMessageMeta(message);
+        ensureUniqueNonce(socket, nonce);
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "Invalid rc_command meta" });
+        return;
+      }
       const room = remoteControlRooms.get(meta.roomId);
       const targetPeer = Array.from(room.peers.values()).find((peer) => peer.role === "target");
       if (!targetPeer) {
         send(socket, { type: "error", message: "No target connected in this room" });
         return;
       }
-
       send(targetPeer.socket, {
         type: "rc_command",
         fromDisplayName: meta.displayName,
         command: message.command || {},
+        meta: message.meta,
       });
       return;
     }
@@ -307,7 +600,13 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: "Join a remote-control room first" });
         return;
       }
-
+      try {
+        const { nonce } = getMessageMeta(message);
+        ensureUniqueNonce(socket, nonce);
+      } catch (error) {
+        send(socket, { type: "error", message: error.message || "Invalid rc_signal meta" });
+        return;
+      }
       const room = remoteControlRooms.get(meta.roomId);
       const targetRole = meta.role === "controller" ? "target" : "controller";
       const oppositePeer = Array.from(room.peers.values()).find((peer) => peer.role === targetRole);
@@ -315,14 +614,13 @@ wss.on("connection", (socket) => {
         send(socket, { type: "error", message: `No ${targetRole} connected in this room` });
         return;
       }
-
       send(oppositePeer.socket, {
         type: "rc_signal",
         fromDisplayName: meta.displayName,
         signalType: message.signalType,
         payload: message.payload || {},
+        meta: message.meta,
       });
-      return;
     }
   });
 
@@ -340,4 +638,5 @@ wss.on("connection", (socket) => {
 server.listen(PORT, HOST, () => {
   console.log(`RemoteHelp server listening on http://${HOST}:${PORT}`);
   console.log(`WebRTC STUN server: ${STUN_URL}`);
+  console.log(`Invite base URL: ${APP_BASE_URL}`);
 });
