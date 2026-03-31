@@ -383,13 +383,14 @@ class RemoteControlController(
     }
 
     private fun allowDisconnectCleanup() {
-        stopScreenShare()
+        val currentStatus = _uiState.value.targetStatus
+        val preserveCapture = _uiState.value.selectedRole == RemoteRole.TARGET && currentStatus.captureActive
         updateTargetStatus(
-            _uiState.value.targetStatus.copy(
-                captureActive = false,
+            currentStatus.copy(
+                captureActive = if (preserveCapture) currentStatus.captureActive else false,
                 accessibilityEnabled = isAccessibilityEnabled(),
                 softKeyboardHidden = isSoftKeyboardHidden(),
-                message = "等待重新连接"
+                message = if (preserveCapture) "控制通道已断开，正在重连" else "等待重新连接"
             )
         )
         _uiState.value = _uiState.value.copy(

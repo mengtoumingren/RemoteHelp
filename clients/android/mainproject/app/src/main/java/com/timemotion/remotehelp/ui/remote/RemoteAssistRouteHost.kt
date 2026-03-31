@@ -275,7 +275,7 @@ fun RemoteAssistRouteHost(
         helperName = uiState.activeSession?.helperName ?: uiState.helperName,
         elderName = uiState.activeSession?.elderName ?: uiState.elderName,
         uiState = remoteState,
-        screenRenderer = if (remoteState.targetStatus.captureActive) callState.assistRenderer else null,
+        screenRenderer = callState.assistRenderer,
         onEndClick = {
             runCatching { coordinator.endCurrentSession() }
                 .onFailure { AppLog.logThrowable("RemoteHelpApp", it, "结束远程协助失败") }
