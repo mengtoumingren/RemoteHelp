@@ -35,6 +35,7 @@ class RemoteControlController(
 
     var onScreenShareStartRequested: ((Intent) -> Boolean)? = null
     var onScreenShareStopRequested: (() -> Unit)? = null
+    var onGuideCommandRequested: ((RemoteCommand) -> Boolean)? = null
     private var isForegroundServiceActive = false
     private var pendingScreenCaptureData: Intent? = null
     private var pendingScreenCaptureProfile: CaptureProfile? = null
@@ -294,6 +295,7 @@ class RemoteControlController(
         RemoteAccessibilityService.softKeyboardStateListener = null
         ScreenCaptureForegroundService.statusListener = null
         ScreenCaptureForegroundService.messageListener = null
+        onGuideCommandRequested = null
         okHttpClient.dispatcher.executorService.shutdown()
     }
 
@@ -345,14 +347,15 @@ class RemoteControlController(
                         appendLog("收到 ${event.fromDisplayName} 的 ${event.command.action.name}")
                         val accessibility = RemoteAccessibilityService.instance
                         if (accessibility == null) {
+                            val guided = onGuideCommandRequested?.invoke(event.command) == true
                             updateTargetStatus(
                                 _uiState.value.targetStatus.copy(
                                     accessibilityEnabled = false,
                                     softKeyboardHidden = isSoftKeyboardHidden(),
-                                    message = "未开启无障碍服务，无法执行远控指令"
+                                    message = if (guided) "未开启无障碍服务，请按屏幕提示操作" else "未开启无障碍服务，无法执行远控指令"
                                 )
                             )
-                            appendLog("无障碍服务未开启，命令未执行")
+                            appendLog(if (guided) "无障碍未开启，已显示远程指引" else "无障碍服务未开启，命令未执行")
                             return@post
                         }
                         val success = accessibility.execute(event.command)

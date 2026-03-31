@@ -111,6 +111,15 @@ fun RemoteAssistScreen(
         9f / 16f
     }
     val controllerName = uiState.peers.firstOrNull { it.role == RemoteRole.CONTROLLER }?.displayName ?: helperName
+    val assistModeLabel = when {
+        side == DeviceSide.HELPER &&
+            uiState.targetStatus.captureActive &&
+            !uiState.targetStatus.accessibilityEnabled -> "当前为指引模式，无法直接代操作"
+        side == DeviceSide.HELPER &&
+            uiState.targetStatus.captureActive &&
+            uiState.targetStatus.accessibilityEnabled -> "当前为代操作模式"
+        else -> uiState.targetStatus.message
+    }
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
         if (side == DeviceSide.HELPER) {
             Column(
@@ -121,7 +130,7 @@ fun RemoteAssistScreen(
             ) {
                 AssistTopOverlay(
                     title = "正在协助：$elderName",
-                    subtitle = uiState.targetStatus.message,
+                    subtitle = assistModeLabel,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(
@@ -788,7 +797,7 @@ private fun ControlRendererPanel(
     }
     surfaceView.apply {
         setEnableHardwareScaler(true)
-        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         setZOrderMediaOverlay(true)
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
     }

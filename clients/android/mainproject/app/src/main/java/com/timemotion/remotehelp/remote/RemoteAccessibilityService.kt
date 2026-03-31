@@ -82,46 +82,26 @@ class RemoteAccessibilityService : AccessibilityService() {
             when (command.action) {
                 RemoteAction.TAP -> {
                     val metrics = applicationContext.readDeviceScreenMetrics()
-                    val x = (command.screenX?.toFloat()
-                        ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                        .coerceIn(0f, metrics.width.toFloat())
-                    val y = (command.screenY?.toFloat()
-                        ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                        .coerceIn(0f, metrics.height.toFloat())
+                    val x = resolveNormalizedX(command) * metrics.width.toFloat()
+                    val y = resolveNormalizedY(command) * metrics.height.toFloat()
                     activateEditableNodeAt(x.toInt(), y.toInt()) || dispatchTapGesture(x, y)
                 }
 
                 RemoteAction.SWIPE -> {
                     val metrics = applicationContext.readDeviceScreenMetrics()
-                    val startX = (command.screenX?.toFloat()
-                        ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                        .coerceIn(0f, metrics.width.toFloat())
-                    val startY = (command.screenY?.toFloat()
-                        ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                        .coerceIn(0f, metrics.height.toFloat())
-                    val endX = (command.endScreenX?.toFloat()
-                        ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                        .coerceIn(0f, metrics.width.toFloat())
-                    val endY = (command.endScreenY?.toFloat()
-                        ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                        .coerceIn(0f, metrics.height.toFloat())
+                    val startX = resolveNormalizedX(command) * metrics.width.toFloat()
+                    val startY = resolveNormalizedY(command) * metrics.height.toFloat()
+                    val endX = resolveEndNormalizedX(command) * metrics.width.toFloat()
+                    val endY = resolveEndNormalizedY(command) * metrics.height.toFloat()
                     dispatchSwipeGesture(startX, startY, endX, endY)
                 }
 
                 RemoteAction.DRAG -> {
                     val metrics = applicationContext.readDeviceScreenMetrics()
-                    val startX = (command.screenX?.toFloat()
-                        ?: ((command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                        .coerceIn(0f, metrics.width.toFloat())
-                    val startY = (command.screenY?.toFloat()
-                        ?: ((command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                        .coerceIn(0f, metrics.height.toFloat())
-                    val endX = (command.endScreenX?.toFloat()
-                        ?: ((command.endNormalizedX ?: command.normalizedX ?: 0.5f) * metrics.width.toFloat()))
-                        .coerceIn(0f, metrics.width.toFloat())
-                    val endY = (command.endScreenY?.toFloat()
-                        ?: ((command.endNormalizedY ?: command.normalizedY ?: 0.5f) * metrics.height.toFloat()))
-                        .coerceIn(0f, metrics.height.toFloat())
+                    val startX = resolveNormalizedX(command) * metrics.width.toFloat()
+                    val startY = resolveNormalizedY(command) * metrics.height.toFloat()
+                    val endX = resolveEndNormalizedX(command) * metrics.width.toFloat()
+                    val endY = resolveEndNormalizedY(command) * metrics.height.toFloat()
                     dispatchLongPressDragGesture(startX, startY, endX, endY)
                 }
 
@@ -410,6 +390,40 @@ class RemoteAccessibilityService : AccessibilityService() {
             }
         }
         return node.takeIf { it.isEditable }
+    }
+
+    private fun resolveNormalizedX(command: RemoteCommand): Float {
+        val metrics = applicationContext.readDeviceScreenMetrics()
+        return (
+            command.normalizedX
+                ?: command.screenX?.toFloat()?.div(metrics.width.toFloat().coerceAtLeast(1f))
+                ?: 0.5f
+            ).coerceIn(0f, 1f)
+    }
+
+    private fun resolveNormalizedY(command: RemoteCommand): Float {
+        val metrics = applicationContext.readDeviceScreenMetrics()
+        return (
+            command.normalizedY
+                ?: command.screenY?.toFloat()?.div(metrics.height.toFloat().coerceAtLeast(1f))
+                ?: 0.5f
+            ).coerceIn(0f, 1f)
+    }
+
+    private fun resolveEndNormalizedX(command: RemoteCommand): Float {
+        return (
+            command.endNormalizedX
+                ?: command.endScreenX?.toFloat()?.div(applicationContext.readDeviceScreenMetrics().width.toFloat().coerceAtLeast(1f))
+                ?: resolveNormalizedX(command)
+            ).coerceIn(0f, 1f)
+    }
+
+    private fun resolveEndNormalizedY(command: RemoteCommand): Float {
+        return (
+            command.endNormalizedY
+                ?: command.endScreenY?.toFloat()?.div(applicationContext.readDeviceScreenMetrics().height.toFloat().coerceAtLeast(1f))
+                ?: resolveNormalizedY(command)
+            ).coerceIn(0f, 1f)
     }
 
     companion object {
