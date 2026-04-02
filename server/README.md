@@ -40,6 +40,9 @@ INVITE_API_KEY=
 INVITE_API_KEY_FILE=.invite_api_key
 INVITE_RATE_LIMIT_WINDOW_MS=60000
 INVITE_RATE_LIMIT_MAX_REQUESTS=30
+WS_ALLOWED_ORIGINS=https://help.yourdomain.com
+WS_ALLOWED_HOSTS=
+WS_REQUIRE_ORIGIN=false
 ```
 
 说明：
@@ -51,6 +54,8 @@ INVITE_RATE_LIMIT_MAX_REQUESTS=30
 - 默认即开启校验；仅在你显式配置 `ENFORCE_INVITE_API_KEY=false` 时才会关闭（不建议）。
 - 两个邀请接口均启用基于来源 IP 的内存限流，默认 1 分钟最多 30 次请求。
 - 若未设置 `INVITE_API_KEY`，服务首次启动会在 `INVITE_API_KEY_FILE` 指定路径自动生成并持久化一个 key。
+- WebSocket 握手新增来源校验：若请求带 `Origin`，将按 `WS_ALLOWED_ORIGINS` 白名单校验；可通过 `WS_ALLOWED_HOSTS` 限制 `Host`。
+- 默认允许无 `Origin` 的原生客户端连接；若需要强制浏览器来源校验可设置 `WS_REQUIRE_ORIGIN=true`。
 
 ## WebSocket 事件
 

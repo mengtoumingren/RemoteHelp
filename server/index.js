@@ -25,6 +25,28 @@ const INVITE_API_KEY_HEADER = "x-invite-api-key";
 const INVITE_RATE_LIMIT_WINDOW_MS = Number(process.env.INVITE_RATE_LIMIT_WINDOW_MS || 60 * 1000);
 const INVITE_RATE_LIMIT_MAX_REQUESTS = Number(process.env.INVITE_RATE_LIMIT_MAX_REQUESTS || 30);
 
+function parseCsv(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const DEFAULT_WS_ALLOWED_ORIGIN = (() => {
+  try {
+    return new URL(APP_BASE_URL).origin;
+  } catch {
+    return "";
+  }
+})();
+const WS_ALLOWED_ORIGINS = new Set(
+  parseCsv(process.env.WS_ALLOWED_ORIGINS || DEFAULT_WS_ALLOWED_ORIGIN).map((origin) => origin.toLowerCase())
+);
+const WS_ALLOWED_HOSTS = new Set(
+  parseCsv(process.env.WS_ALLOWED_HOSTS).map((host) => host.toLowerCase())
+);
+const WS_REQUIRE_ORIGIN = String(process.env.WS_REQUIRE_ORIGIN || "false").toLowerCase() === "true";
+
 function validateTokenSecret(secret, source) {
   if (!secret || secret.length < MIN_TOKEN_SECRET_LENGTH) {
     throw new Error(`TOKEN_SECRET from ${source} is too short, min length is ${MIN_TOKEN_SECRET_LENGTH}`);
@@ -431,6 +453,33 @@ function requireInviteApiKey(req, res, next) {
   next();
 }
 
+function validateWsHandshake(request) {
+  const host = String(request.headers.host || "").trim().toLowerCase();
+  if (WS_ALLOWED_HOSTS.size > 0 && (!host || !WS_ALLOWED_HOSTS.has(host))) {
+    return { ok: false, reason: "Host is not allowed" };
+  }
+
+  const originHeader = String(request.headers.origin || "").trim();
+  if (!originHeader) {
+    if (WS_REQUIRE_ORIGIN) {
+      return { ok: false, reason: "Origin is required" };
+    }
+    return { ok: true };
+  }
+
+  let origin;
+  try {
+    origin = new URL(originHeader).origin.toLowerCase();
+  } catch {
+    return { ok: false, reason: "Invalid Origin header" };
+  }
+
+  if (WS_ALLOWED_ORIGINS.size > 0 && !WS_ALLOWED_ORIGINS.has(origin)) {
+    return { ok: false, reason: "Origin is not allowed" };
+  }
+  return { ok: true };
+}
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true, timestamp: Date.now() });
 });
@@ -504,7 +553,13 @@ setInterval(pruneExpiredInvites, 30_000).unref();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws", maxPayload: MAX_WS_MESSAGE_BYTES });
 
-wss.on("connection", (socket) => {
+wss.on("connection", (socket, request) => {
+  const handshake = validateWsHandshake(request);
+  if (!handshake.ok) {
+    socket.close(1008, handshake.reason || "Handshake rejected");
+    return;
+  }
+
   socket.meta = null;
   socket.remoteMeta = null;
   socket.messageRateWindow = [];
