@@ -7,7 +7,7 @@ RemoteHelp 是一个面向家庭远程协助场景的 Android + Node.js 项目�
 
 ## 文档入口
 
-- [使用文档](./docs/user-guide.md)
+- [使用文档（含协助方/被协助方操作说明）](./docs/user-guide.md)
 - [技术文档](./docs/technical-guide.md)
 - [主应用落地说明](./clients/android/mainproject/IMPLEMENTATION.md)
 - [服务端说明](./server/README.md)
@@ -18,9 +18,61 @@ RemoteHelp 是一个面向家庭远程协助场景的 Android + Node.js 项目�
 - `clients/android/mainproject/`：统一主应用，包含邀请、验证、会话和远程协助流程
 - `docs/`：项目说明文档
 
-## 快速开始
+## 配置说明
 
-### 1. 启动服务端
+### 服务端配置
+
+服务端环境变量（主要项）：
+
+```env
+PORT=3000
+HOST=127.0.0.1
+NODE_ENV=development
+
+TOKEN_SECRET=
+TOKEN_SECRET_FILE=.token_secret
+MIN_TOKEN_SECRET_LENGTH=32
+
+ENFORCE_INVITE_API_KEY=true
+INVITE_API_KEY=
+INVITE_API_KEY_FILE=.invite_api_key
+
+INVITE_RATE_LIMIT_WINDOW_MS=60000
+INVITE_RATE_LIMIT_MAX_REQUESTS=30
+
+WS_ALLOWED_ORIGINS=https://help.yourdomain.com
+WS_ALLOWED_HOSTS=
+WS_REQUIRE_ORIGIN=false
+```
+
+说明：
+
+- `TOKEN_SECRET` 用于签名验证令牌，生产环境必须配置强密钥（或有效 `TOKEN_SECRET_FILE`）。
+- `INVITE_API_KEY` 用于保护邀请接口，默认开启校验。
+- 若未手动设置 `INVITE_API_KEY`，服务首次启动会在 `INVITE_API_KEY_FILE` 自动生成并持久化 key。
+- 默认监听 `127.0.0.1`，若需局域网联调请显式设置 `HOST=0.0.0.0`。
+
+### 客户端配置
+
+客户端主要在应用内“设置”页面配置，关键项如下：
+
+- 信令服务地址
+- 邀请接口 API Key
+- 默认协助方姓名
+- STUN / TURN 服务地址
+- TURN 用户名与密码
+
+推荐值：
+
+- 生产：`wss://<你的域名>/ws`
+- 模拟器联调：`ws://10.0.2.2:3000/ws`（仅 Debug）
+- 真机联调：`ws://<宿主机局域网IP>:3000/ws`（仅 Debug）
+
+## 使用说明
+
+### 服务端使用
+
+1. 安装依赖并启动
 
 ```bash
 cd server
@@ -33,21 +85,33 @@ npm run dev
 - `http://127.0.0.1:3000`
 - `ws://127.0.0.1:3000/ws`
 
-### 2. 运行 Android 主应用
-
-使用 Android Studio 打开 `clients/android/mainproject`，直接运行 `mainproject` 模块。
-
-调试时默认信令地址为：
-
-- 模拟器：`ws://10.0.2.2:3000/ws`
-- 真机：`ws://<宿主机局域网IP>:3000/ws`
-
-### 3. 查看服务是否可用
+2. 健康检查
 
 ```text
 GET /health
 GET /config
 ```
+
+### 客户端使用
+
+使用 Android Studio 打开 `clients/android/mainproject`，直接运行 `mainproject` 模块。
+
+首次运行建议：
+
+- 完成相机、麦克风、通知、悬浮窗、无障碍、屏幕采集等权限授权。
+- 进入设置页填写服务地址与邀请接口 API Key（来自服务端 `INVITE_API_KEY` 或 `server/.invite_api_key`）。
+
+调试时常用信令地址：
+
+- 模拟器：`ws://10.0.2.2:3000/ws`
+- 真机：`ws://<宿主机局域网IP>:3000/ws`
+
+主流程：
+
+1. 协助方创建请求
+2. 被协助方打开链接并进入核验
+3. 双方视频核验通过
+4. 进入远程协助与屏幕控制
 
 ## 当前能力
 
