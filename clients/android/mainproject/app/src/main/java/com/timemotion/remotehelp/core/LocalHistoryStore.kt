@@ -5,7 +5,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class LocalHistoryStore(context: Context) {
-    private val preferences = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+    private val legacyPreferences = context.getSharedPreferences(LEGACY_PREF_NAME, Context.MODE_PRIVATE)
+    private val preferences = SecurePreferencesFactory.create(context.applicationContext, PREF_NAME)
+
+    init {
+        migrateLegacyDataIfNeeded()
+    }
 
     fun loadPendingHelperSession(): ActiveHelpSession? {
         val raw = preferences.getString(KEY_PENDING_HELPER_SESSION, null) ?: return null
@@ -146,11 +151,35 @@ class LocalHistoryStore(context: Context) {
         preferences.edit().putString(KEY_RECENT_CONTACTS, array.toString()).apply()
     }
 
+    private fun migrateLegacyDataIfNeeded() {
+        if (preferences.getBoolean(KEY_MIGRATED, false)) {
+            return
+        }
+        val pendingSession = legacyPreferences.getString(KEY_PENDING_HELPER_SESSION, null)
+        val recentContacts = legacyPreferences.getString(KEY_RECENT_CONTACTS, null)
+        val history = legacyPreferences.getString(KEY_HISTORY, null)
+        preferences.edit().apply {
+            if (!pendingSession.isNullOrBlank()) {
+                putString(KEY_PENDING_HELPER_SESSION, pendingSession)
+            }
+            if (!recentContacts.isNullOrBlank()) {
+                putString(KEY_RECENT_CONTACTS, recentContacts)
+            }
+            if (!history.isNullOrBlank()) {
+                putString(KEY_HISTORY, history)
+            }
+            putBoolean(KEY_MIGRATED, true)
+        }.apply()
+        legacyPreferences.edit().clear().apply()
+    }
+
     companion object {
-        private const val PREF_NAME = "remote_help_local_history"
+        private const val PREF_NAME = "remote_help_local_history_secure"
+        private const val LEGACY_PREF_NAME = "remote_help_local_history"
         private const val KEY_RECENT_CONTACTS = "recent_contacts"
         private const val KEY_HISTORY = "session_history"
         private const val KEY_PENDING_HELPER_SESSION = "pending_helper_session"
+        private const val KEY_MIGRATED = "migrated_v1"
         private const val MAX_ITEMS = 8
     }
 }
