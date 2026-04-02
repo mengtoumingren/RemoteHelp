@@ -19,3 +19,9 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Preserve runtime metadata frequently needed by reflection/serialization.
+-keepattributes Signature,InnerClasses,EnclosingMethod,*Annotation*
+
+# Keep WebRTC classes to avoid native/reflective lookup regressions.
+-keep class org.webrtc.** { *; }
