@@ -6,7 +6,7 @@ const path = require("path");
 const { WebSocket, WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || "0.0.0.0";
+const HOST = process.env.HOST || "127.0.0.1";
 const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();
 const STUN_URL = process.env.STUN_URL || "stun:stun.timemotion.top:3478";
 const TURN_URL = process.env.TURN_URL || "turn:turn.timemotion.top:3478";

@@ -16,8 +16,8 @@ npm run dev
 
 默认监听：
 
-- `http://0.0.0.0:3000`
-- WebSocket：`ws://<your-ip>:3000/ws`
+- `http://127.0.0.1:3000`
+- WebSocket：`ws://127.0.0.1:3000/ws`
 
 ## 接口
 
@@ -28,7 +28,7 @@ npm run dev
 
 ```env
 PORT=3000
-HOST=0.0.0.0
+HOST=127.0.0.1
 NODE_ENV=development
 TOKEN_SECRET=
 TOKEN_SECRET_FILE=.token_secret
@@ -56,6 +56,7 @@ WS_REQUIRE_ORIGIN=false
 - 若未设置 `INVITE_API_KEY`，服务首次启动会在 `INVITE_API_KEY_FILE` 指定路径自动生成并持久化一个 key。
 - WebSocket 握手新增来源校验：若请求带 `Origin`，将按 `WS_ALLOWED_ORIGINS` 白名单校验；可通过 `WS_ALLOWED_HOSTS` 限制 `Host`。
 - 默认允许无 `Origin` 的原生客户端连接；若需要强制浏览器来源校验可设置 `WS_REQUIRE_ORIGIN=true`。
+- 默认仅监听本机回环地址；若需要局域网或公网访问，请显式配置 `HOST=0.0.0.0` 并配合防火墙/安全组限制来源。
 
 ## WebSocket 事件
 
