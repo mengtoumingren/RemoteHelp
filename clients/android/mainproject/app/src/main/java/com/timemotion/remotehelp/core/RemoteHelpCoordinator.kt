@@ -34,7 +34,7 @@ class RemoteHelpCoordinator(
     private val serverApiClient = ServerApiClient(OkHttpClient.Builder().build())
     private val _uiState = MutableStateFlow(
         RemoteHelpUiState(
-            serverUrl = ConnectionSettingsStore(appContext).loadServerUrl("ws://10.0.2.2:3000/ws"),
+            serverUrl = ConnectionSettingsStore(appContext).loadServerUrl("wss://help.yourdomain.com/ws"),
             helperName = ConnectionSettingsStore(appContext).loadHelperName("张三"),
             stunServer = ConnectionSettingsStore(appContext).loadStunServer("stun:stun.timemotion.top:3478"),
             turnServer = ConnectionSettingsStore(appContext).loadTurnServer(""),

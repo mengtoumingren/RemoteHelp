@@ -1,5 +1,6 @@
 ﻿package com.timemotion.remotehelp.core
 
+import com.timemotion.remotehelp.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -59,16 +60,27 @@ class ServerApiClient(
         val normalized = serverUrl.trim()
         val httpUrlText = when {
             normalized.startsWith("wss://") -> "https://${normalized.removePrefix("wss://")}"
-            normalized.startsWith("ws://") -> "http://${normalized.removePrefix("ws://")}"
-            normalized.startsWith("https://") || normalized.startsWith("http://") -> normalized
-            else -> error("服务地址不正确，请填写例如 ws://10.0.2.2:3000/ws")
+            normalized.startsWith("ws://") -> {
+                if (!BuildConfig.ALLOW_INSECURE_TRANSPORT) {
+                    error("生产环境仅允许 wss:// 地址")
+                }
+                "http://${normalized.removePrefix("ws://")}" 
+            }
+            normalized.startsWith("https://") -> normalized
+            normalized.startsWith("http://") -> {
+                if (!BuildConfig.ALLOW_INSECURE_TRANSPORT) {
+                    error("生产环境仅允许 HTTPS 接口")
+                }
+                normalized
+            }
+            else -> error("服务地址不正确，请填写例如 wss://help.yourdomain.com/ws")
         }
         httpUrlText.toHttpUrlOrNull()
             ?.newBuilder()
             ?.query(null)
             ?.fragment(null)
             ?.build()
-            ?: error("服务地址不正确，请填写例如 ws://10.0.2.2:3000/ws")
+            ?: error("服务地址不正确，请填写例如 wss://help.yourdomain.com/ws")
     }
 
     companion object {

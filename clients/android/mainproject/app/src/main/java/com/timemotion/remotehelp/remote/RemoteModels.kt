@@ -102,7 +102,7 @@ data class RemoteTargetStatus(
 }
 
 data class RemoteControlUiState(
-    val serverUrl: String = "ws://10.0.2.2:3000/ws",
+    val serverUrl: String = "wss://help.yourdomain.com/ws",
     val roomId: String = "remote-device",
     val displayName: String = "Device-${UUID.randomUUID().toString().take(4)}",
     val selectedRole: RemoteRole = RemoteRole.TARGET,

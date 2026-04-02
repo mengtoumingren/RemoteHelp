@@ -1,6 +1,7 @@
 package com.timemotion.remotehelp.core
 
 import android.content.Context
+import com.timemotion.remotehelp.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class RemoteHelpSettingsManager(
@@ -47,8 +48,13 @@ class RemoteHelpSettingsManager(
 
     fun saveSettings() {
         val serverUrl = uiState.value.serverUrl.trim()
-        if (!serverUrl.startsWith("ws://") && !serverUrl.startsWith("wss://")) {
-            uiState.value = uiState.value.copy(bannerMessage = "服务地址必须使用 ws:// 或 wss://")
+        if (!isAllowedServerUrl(serverUrl)) {
+            val banner = if (BuildConfig.ALLOW_INSECURE_TRANSPORT) {
+                "服务地址必须使用 ws:// 或 wss://"
+            } else {
+                "生产环境仅允许 wss:// 地址"
+            }
+            uiState.value = uiState.value.copy(bannerMessage = banner)
             return
         }
         settingsStore.save(
@@ -62,5 +68,14 @@ class RemoteHelpSettingsManager(
         uiState.value = uiState.value.copy(
             bannerMessage = "设置已保存"
         )
+    }
+
+    private fun isAllowedServerUrl(serverUrl: String): Boolean {
+        val normalized = serverUrl.lowercase()
+        return if (BuildConfig.ALLOW_INSECURE_TRANSPORT) {
+            normalized.startsWith("ws://") || normalized.startsWith("wss://")
+        } else {
+            normalized.startsWith("wss://")
+        }
     }
 }

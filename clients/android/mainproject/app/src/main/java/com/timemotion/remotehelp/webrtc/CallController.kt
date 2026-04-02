@@ -58,7 +58,7 @@ import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 import kotlinx.coroutines.flow.StateFlow
 
 data class CallUiState(
-    val serverUrl: String = "ws://10.0.2.2:3000/ws",
+    val serverUrl: String = "wss://help.yourdomain.com/ws",
     val roomId: String = "demo-room",
     val displayName: String = "Android-${UUID.randomUUID().toString().take(4)}",
     val status: String = "等待加入房间",

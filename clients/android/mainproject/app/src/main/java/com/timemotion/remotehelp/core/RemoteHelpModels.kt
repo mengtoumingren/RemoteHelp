@@ -70,7 +70,7 @@ data class ActiveHelpSession(
 
 data class RemoteHelpUiState(
     val side: DeviceSide = DeviceSide.HELPER,
-    val serverUrl: String = "ws://10.0.2.2:3000/ws",
+    val serverUrl: String = "wss://help.yourdomain.com/ws",
     val helperName: String = "张三",
     val stunServer: String = "stun:stun.timemotion.top:3478",
     val turnServer: String = "",
