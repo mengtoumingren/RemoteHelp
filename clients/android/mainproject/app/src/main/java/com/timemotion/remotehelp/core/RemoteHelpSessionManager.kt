@@ -49,7 +49,7 @@ class RemoteHelpSessionManager(
         uiState.value = state.copy(bannerMessage = "正在校验协助链接")
         scope.launch {
             runCatching {
-                serverApiClient.resolveInvite(state.serverUrl, raw)
+                serverApiClient.resolveInvite(state.serverUrl, raw, state.inviteApiKey)
             }.onSuccess { invite ->
                 callController.leaveRoom()
                 remoteController.disconnect()
@@ -138,7 +138,7 @@ class RemoteHelpSessionManager(
         )
         scope.launch {
             runCatching {
-                serverApiClient.createInvite(state.serverUrl, payload)
+                serverApiClient.createInvite(state.serverUrl, payload, state.inviteApiKey)
             }.onSuccess { invite ->
                 historyManager.saveRecentContact(invite.elderName, invite.elderPhone, invite.createdAt)
                 val session = ActiveHelpSession(

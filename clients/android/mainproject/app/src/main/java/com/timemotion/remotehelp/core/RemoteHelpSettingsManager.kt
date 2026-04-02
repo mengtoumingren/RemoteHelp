@@ -14,6 +14,8 @@ class RemoteHelpSettingsManager(
 
     fun loadHelperName(defaultValue: String): String = settingsStore.loadHelperName(defaultValue)
 
+    fun loadInviteApiKey(defaultValue: String): String = settingsStore.loadInviteApiKey(defaultValue)
+
     fun loadStunServer(defaultValue: String): String = settingsStore.loadStunServer(defaultValue)
 
     fun loadTurnServer(defaultValue: String): String = settingsStore.loadTurnServer(defaultValue)
@@ -28,6 +30,10 @@ class RemoteHelpSettingsManager(
 
     fun updateHelperName(value: String) {
         uiState.value = uiState.value.copy(helperName = value)
+    }
+
+    fun updateInviteApiKey(value: String) {
+        uiState.value = uiState.value.copy(inviteApiKey = value)
     }
 
     fun updateStunServer(value: String) {
@@ -59,6 +65,7 @@ class RemoteHelpSettingsManager(
         }
         settingsStore.save(
             serverUrl = serverUrl,
+            inviteApiKey = uiState.value.inviteApiKey.trim(),
             helperName = uiState.value.helperName.trim(),
             stunServer = uiState.value.stunServer.trim(),
             turnServer = uiState.value.turnServer.trim(),

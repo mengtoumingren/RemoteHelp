@@ -13,25 +13,31 @@ import org.json.JSONObject
 class ServerApiClient(
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder().build()
 ) {
-    suspend fun createInvite(serverUrl: String, payload: HelpInvitePayload): ServerInvitePayload = withContext(Dispatchers.IO) {
+    suspend fun createInvite(serverUrl: String, payload: HelpInvitePayload, inviteApiKey: String = ""): ServerInvitePayload = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("helperName", payload.helperName)
             .put("elderName", payload.elderName)
             .put("elderPhone", payload.elderPhone)
-        executeInviteRequest(serverUrl, "/invites", body)
+        executeInviteRequest(serverUrl, "/invites", body, inviteApiKey)
     }
 
-    suspend fun resolveInvite(serverUrl: String, rawInvite: String): ServerInvitePayload = withContext(Dispatchers.IO) {
+    suspend fun resolveInvite(serverUrl: String, rawInvite: String, inviteApiKey: String = ""): ServerInvitePayload = withContext(Dispatchers.IO) {
         val token = HelpLinkCodec.extractToken(rawInvite).ifBlank { error("未识别到请求令牌") }
-        executeInviteRequest(serverUrl, "/invites/resolve", JSONObject().put("token", token))
+        executeInviteRequest(serverUrl, "/invites/resolve", JSONObject().put("token", token), inviteApiKey)
     }
 
-    private fun executeInviteRequest(serverUrl: String, path: String, body: JSONObject): ServerInvitePayload {
+    private fun executeInviteRequest(serverUrl: String, path: String, body: JSONObject, inviteApiKey: String): ServerInvitePayload {
         val url = resolveHttpBaseUrl(serverUrl).newBuilder()
             .encodedPath(path)
             .build()
+        val effectiveInviteApiKey = inviteApiKey.trim().ifBlank { BuildConfig.INVITE_API_KEY }
         val request = Request.Builder()
             .url(url)
+            .apply {
+                if (effectiveInviteApiKey.isNotBlank()) {
+                    header("x-invite-api-key", effectiveInviteApiKey)
+                }
+            }
             .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
         okHttpClient.newCall(request).execute().use { response ->

@@ -1,6 +1,8 @@
 const express = require("express");
 const http = require("http");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const { WebSocket, WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -13,6 +15,42 @@ const INVITE_TTL_MS = Number(process.env.INVITE_TTL_MS || 5 * 60 * 1000);
 const MAX_WS_MESSAGE_BYTES = Number(process.env.MAX_WS_MESSAGE_BYTES || 256 * 1024);
 const MAX_MESSAGES_PER_10S = Number(process.env.MAX_MESSAGES_PER_10S || 120);
 const MESSAGE_META_TTL_MS = Number(process.env.MESSAGE_META_TTL_MS || 2 * 60 * 1000);
+const INVITE_API_KEY_FILE = process.env.INVITE_API_KEY_FILE || path.join(__dirname, ".invite_api_key");
+const ENFORCE_INVITE_API_KEY = String(
+  process.env.ENFORCE_INVITE_API_KEY || "true"
+).toLowerCase() === "true";
+const INVITE_API_KEY_HEADER = "x-invite-api-key";
+const INVITE_RATE_LIMIT_WINDOW_MS = Number(process.env.INVITE_RATE_LIMIT_WINDOW_MS || 60 * 1000);
+const INVITE_RATE_LIMIT_MAX_REQUESTS = Number(process.env.INVITE_RATE_LIMIT_MAX_REQUESTS || 30);
+
+function loadOrCreateInviteApiKey() {
+  const envKey = String(process.env.INVITE_API_KEY || "").trim();
+  if (envKey) {
+    return envKey;
+  }
+  try {
+    const filePath = path.resolve(INVITE_API_KEY_FILE);
+    if (fs.existsSync(filePath)) {
+      const fileKey = fs.readFileSync(filePath, "utf8").trim();
+      if (fileKey) {
+        return fileKey;
+      }
+    }
+    const generatedKey = crypto.randomBytes(32).toString("hex");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${generatedKey}\n`, { encoding: "utf8", mode: 0o600 });
+    console.warn(`[security] INVITE_API_KEY file not found, generated new key at ${filePath}`);
+    return generatedKey;
+  } catch (error) {
+    throw new Error(`Failed to load or create invite API key: ${error.message || "unknown"}`);
+  }
+}
+
+const INVITE_API_KEY = loadOrCreateInviteApiKey();
+
+if (ENFORCE_INVITE_API_KEY && !INVITE_API_KEY) {
+  throw new Error("INVITE_API_KEY is required when ENFORCE_INVITE_API_KEY=true");
+}
 
 const app = express();
 app.use(express.json());
@@ -20,6 +58,7 @@ app.use(express.json());
 const inviteSessions = new Map();
 const webrtcRooms = new Map();
 const remoteControlRooms = new Map();
+const inviteRequestCounters = new Map();
 
 function base64UrlEncode(value) {
   return Buffer.from(value)
@@ -300,6 +339,59 @@ function ensureUniqueNonce(socket, nonce) {
   timer.unref?.();
 }
 
+function getRequestIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((value) => value.trim())
+    .find(Boolean);
+  return forwarded || req.socket?.remoteAddress || "unknown";
+}
+
+function pruneInviteRateLimitCounters(now = Date.now()) {
+  inviteRequestCounters.forEach((record, key) => {
+    if (now - record.windowStart >= INVITE_RATE_LIMIT_WINDOW_MS) {
+      inviteRequestCounters.delete(key);
+    }
+  });
+}
+
+function enforceInviteRateLimit(req, res, next) {
+  pruneInviteRateLimitCounters();
+  const key = `${req.path}:${getRequestIp(req)}`;
+  const now = Date.now();
+  const existing = inviteRequestCounters.get(key);
+  if (!existing || now - existing.windowStart >= INVITE_RATE_LIMIT_WINDOW_MS) {
+    inviteRequestCounters.set(key, { windowStart: now, count: 1 });
+    next();
+    return;
+  }
+  existing.count += 1;
+  if (existing.count > INVITE_RATE_LIMIT_MAX_REQUESTS) {
+    res.status(429).json({ ok: false, message: "Too many invite requests" });
+    return;
+  }
+  next();
+}
+
+function requireInviteApiKey(req, res, next) {
+  if (!ENFORCE_INVITE_API_KEY) {
+    next();
+    return;
+  }
+  const provided = String(req.header(INVITE_API_KEY_HEADER) || "").trim();
+  if (!provided) {
+    res.status(401).json({ ok: false, message: "Missing invite API key" });
+    return;
+  }
+  const expectedBuffer = Buffer.from(INVITE_API_KEY, "utf8");
+  const providedBuffer = Buffer.from(provided, "utf8");
+  if (providedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+    res.status(403).json({ ok: false, message: "Invalid invite API key" });
+    return;
+  }
+  next();
+}
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true, timestamp: Date.now() });
 });
@@ -315,7 +407,7 @@ app.get("/config", (_req, res) => {
   });
 });
 
-app.post("/invites", (req, res) => {
+app.post("/invites", enforceInviteRateLimit, requireInviteApiKey, (req, res) => {
   try {
     const elderPhone = sanitizePhone(req.body?.elderPhone);
     if (!elderPhone) {
@@ -343,7 +435,7 @@ app.post("/invites", (req, res) => {
   }
 });
 
-app.post("/invites/resolve", (req, res) => {
+app.post("/invites/resolve", enforceInviteRateLimit, requireInviteApiKey, (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
     const { session } = getInviteSessionByToken(token, "elder");

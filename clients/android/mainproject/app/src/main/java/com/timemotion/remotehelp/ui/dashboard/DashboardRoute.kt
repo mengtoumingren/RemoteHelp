@@ -80,6 +80,7 @@ fun DashboardRoute(viewModel: DashboardViewModel) {
         DashboardPage.SETTINGS -> SettingsPage(
             uiState = uiState,
             onServerUrlChange = viewModel::updateServerUrl,
+            onInviteApiKeyChange = viewModel::updateInviteApiKey,
             onHelperNameChange = viewModel::updateHelperName,
             onStunServerChange = viewModel::updateStunServer,
             onTurnServerChange = viewModel::updateTurnServer,

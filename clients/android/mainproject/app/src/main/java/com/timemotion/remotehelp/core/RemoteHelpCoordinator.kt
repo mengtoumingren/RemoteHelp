@@ -35,6 +35,7 @@ class RemoteHelpCoordinator(
     private val _uiState = MutableStateFlow(
         RemoteHelpUiState(
             serverUrl = ConnectionSettingsStore(appContext).loadServerUrl("wss://help.yourdomain.com/ws"),
+            inviteApiKey = ConnectionSettingsStore(appContext).loadInviteApiKey(""),
             helperName = ConnectionSettingsStore(appContext).loadHelperName("张三"),
             stunServer = ConnectionSettingsStore(appContext).loadStunServer("stun:stun.timemotion.top:3478"),
             turnServer = ConnectionSettingsStore(appContext).loadTurnServer(""),
@@ -105,6 +106,10 @@ class RemoteHelpCoordinator(
 
     fun updateHelperName(value: String) {
         settingsManager.updateHelperName(value)
+    }
+
+    fun updateInviteApiKey(value: String) {
+        settingsManager.updateInviteApiKey(value)
     }
 
     fun updateStunServer(value: String) {

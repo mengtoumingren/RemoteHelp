@@ -46,6 +46,7 @@ import com.timemotion.remotehelp.core.RemoteHelpUiState
 fun SettingsPage(
     uiState: RemoteHelpUiState,
     onServerUrlChange: (String) -> Unit,
+    onInviteApiKeyChange: (String) -> Unit,
     onHelperNameChange: (String) -> Unit,
     onStunServerChange: (String) -> Unit,
     onTurnServerChange: (String) -> Unit,
@@ -118,6 +119,18 @@ fun SettingsPage(
                             value = uiState.serverUrl,
                             onValueChange = onServerUrlChange,
                             label = { Text("信令服务地址") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF215A6D),
+                                focusedLabelColor = Color(0xFF215A6D)
+                            ),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = uiState.inviteApiKey,
+                            onValueChange = onInviteApiKeyChange,
+                            label = { Text("邀请接口 API Key") },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(

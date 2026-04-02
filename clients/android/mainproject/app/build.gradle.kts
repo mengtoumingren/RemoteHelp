@@ -4,6 +4,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val inviteApiKey = providers.gradleProperty("REMOTEHELP_INVITE_API_KEY")
+    .orElse("")
+    .get()
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
 android {
     namespace = "com.timemotion.remotehelp"
     compileSdk {
@@ -16,6 +22,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.1"
+        buildConfigField("String", "INVITE_API_KEY", "\"$inviteApiKey\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
