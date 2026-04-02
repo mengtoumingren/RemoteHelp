@@ -7,10 +7,12 @@ const { WebSocket, WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
+const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();
 const STUN_URL = process.env.STUN_URL || "stun:stun.timemotion.top:3478";
 const TURN_URL = process.env.TURN_URL || "turn:turn.timemotion.top:3478";
 const APP_BASE_URL = (process.env.APP_BASE_URL || "https://help.yourdomain.com").replace(/\/+$/, "");
-const TOKEN_SECRET = process.env.TOKEN_SECRET || "remotehelp-server-secret";
+const TOKEN_SECRET_FILE = process.env.TOKEN_SECRET_FILE || path.join(__dirname, ".token_secret");
+const MIN_TOKEN_SECRET_LENGTH = Number(process.env.MIN_TOKEN_SECRET_LENGTH || 32);
 const INVITE_TTL_MS = Number(process.env.INVITE_TTL_MS || 5 * 60 * 1000);
 const MAX_WS_MESSAGE_BYTES = Number(process.env.MAX_WS_MESSAGE_BYTES || 256 * 1024);
 const MAX_MESSAGES_PER_10S = Number(process.env.MAX_MESSAGES_PER_10S || 120);
@@ -22,6 +24,43 @@ const ENFORCE_INVITE_API_KEY = String(
 const INVITE_API_KEY_HEADER = "x-invite-api-key";
 const INVITE_RATE_LIMIT_WINDOW_MS = Number(process.env.INVITE_RATE_LIMIT_WINDOW_MS || 60 * 1000);
 const INVITE_RATE_LIMIT_MAX_REQUESTS = Number(process.env.INVITE_RATE_LIMIT_MAX_REQUESTS || 30);
+
+function validateTokenSecret(secret, source) {
+  if (!secret || secret.length < MIN_TOKEN_SECRET_LENGTH) {
+    throw new Error(`TOKEN_SECRET from ${source} is too short, min length is ${MIN_TOKEN_SECRET_LENGTH}`);
+  }
+  if (secret === "remotehelp-server-secret") {
+    throw new Error(`TOKEN_SECRET from ${source} uses forbidden weak default value`);
+  }
+  const uniqueChars = new Set(secret).size;
+  if (uniqueChars < 8) {
+    throw new Error(`TOKEN_SECRET from ${source} appears weak (not enough character diversity)`);
+  }
+}
+
+function loadTokenSecret() {
+  const envSecret = String(process.env.TOKEN_SECRET || "").trim();
+  if (envSecret) {
+    validateTokenSecret(envSecret, "env");
+    return envSecret;
+  }
+  const filePath = path.resolve(TOKEN_SECRET_FILE);
+  if (fs.existsSync(filePath)) {
+    const fileSecret = fs.readFileSync(filePath, "utf8").trim();
+    validateTokenSecret(fileSecret, "file");
+    return fileSecret;
+  }
+  if (NODE_ENV === "production") {
+    throw new Error("Missing TOKEN_SECRET in production. Set TOKEN_SECRET or provide TOKEN_SECRET_FILE with a strong secret.");
+  }
+  const generatedSecret = crypto.randomBytes(48).toString("hex");
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${generatedSecret}\n`, { encoding: "utf8", mode: 0o600 });
+  console.warn(`[security] TOKEN_SECRET was missing, generated strong secret at ${filePath} (non-production only)`);
+  return generatedSecret;
+}
+
+const TOKEN_SECRET = loadTokenSecret();
 
 function loadOrCreateInviteApiKey() {
   const envKey = String(process.env.INVITE_API_KEY || "").trim();

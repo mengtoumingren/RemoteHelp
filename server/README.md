@@ -29,6 +29,10 @@ npm run dev
 ```env
 PORT=3000
 HOST=0.0.0.0
+NODE_ENV=development
+TOKEN_SECRET=
+TOKEN_SECRET_FILE=.token_secret
+MIN_TOKEN_SECRET_LENGTH=32
 STUN_URL=stun:stun.timemotion.top:3478
 TURN_URL=turn:turn.timemotion.top:3478
 ENFORCE_INVITE_API_KEY=true
@@ -40,6 +44,9 @@ INVITE_RATE_LIMIT_MAX_REQUESTS=30
 
 说明：
 
+- `TOKEN_SECRET` 不再提供硬编码默认值；必须为强随机密钥。
+- 生产环境（`NODE_ENV=production`）若未提供 `TOKEN_SECRET` 且 `TOKEN_SECRET_FILE` 不存在，将拒绝启动。
+- 非生产环境首次启动若缺少 `TOKEN_SECRET`，会自动生成并写入 `TOKEN_SECRET_FILE`。
 - 当 `ENFORCE_INVITE_API_KEY=true` 时，`POST /invites` 与 `POST /invites/resolve` 必须携带请求头 `x-invite-api-key`。
 - 默认即开启校验；仅在你显式配置 `ENFORCE_INVITE_API_KEY=false` 时才会关闭（不建议）。
 - 两个邀请接口均启用基于来源 IP 的内存限流，默认 1 分钟最多 30 次请求。
