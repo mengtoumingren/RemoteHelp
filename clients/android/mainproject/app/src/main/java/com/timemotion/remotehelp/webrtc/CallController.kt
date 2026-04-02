@@ -83,7 +83,7 @@ class CallController(
         private const val LOCAL_CAPTURE_HEIGHT = 720
         private const val LOCAL_CAPTURE_FPS = 30
         private const val SCREEN_SHARE_MAX_BITRATE_BPS = 800_000
-        private const val SCREEN_SHARE_MAX_FPS = 16
+        private const val SCREEN_SHARE_MAX_FPS = 10
         private const val LOCAL_CAMERA_TRACK_ID = "verification-video"
         private const val LOCAL_SCREEN_TRACK_ID = "screen-share-video"
         private const val EXTRA_SCREEN_CAPTURE_WIDTH = "remotehelp.extra.screen_capture_width"
