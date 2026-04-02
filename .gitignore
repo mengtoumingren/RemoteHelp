@@ -1,2 +1,19 @@
-server/node_modules/*
-server/dist/*
+server/node_modules/
+server/dist/
+
+# Android local environment
+clients/android/mainproject/local.properties
+**/local.properties
+
+# Generated server secrets
+server/.invite_api_key
+server/.token_secret
+
+# Key and certificate artifacts
+key
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+clients/android/mainproject/app/debug/*

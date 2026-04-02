@@ -2,14 +2,15 @@ package com.timemotion.remotehelp.remote
 
 import android.os.Handler
 import android.os.Looper
+import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
-import com.timemotion.remotehelp.core.AppLog
-import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
+import java.util.UUID
 
 sealed interface RemoteSignalEvent {
     data object Connected : RemoteSignalEvent
@@ -49,7 +50,8 @@ class RemoteSignalClient(
         val url: String,
         val roomId: String,
         val role: RemoteRole,
-        val displayName: String
+        val displayName: String,
+        val authToken: String
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -60,10 +62,11 @@ class RemoteSignalClient(
     private var reconnectRunnable: Runnable? = null
     private var manualDisconnect = false
 
-    fun connect(url: String, roomId: String, role: RemoteRole, displayName: String) {
+    fun connect(url: String, roomId: String, role: RemoteRole, displayName: String, authToken: String) {
         runCatching {
+            require(authToken.isNotBlank()) { "缺少远控链路令牌，请重新生成协助请求" }
             this.roomId = roomId.trim()
-            connectParams = ConnectParams(url.trim(), roomId.trim(), role, displayName.trim())
+            connectParams = ConnectParams(url.trim(), roomId.trim(), role, displayName.trim(), authToken.trim())
             manualDisconnect = false
             reconnectAttempt = 0
             cancelReconnect()
@@ -81,6 +84,7 @@ class RemoteSignalClient(
                 .put("type", "rc_target_status")
                 .put("roomId", roomId)
                 .put("targetStatus", status.toJson())
+                .put("meta", buildMessageMeta())
                 .toString()
         )
     }
@@ -92,6 +96,7 @@ class RemoteSignalClient(
                 .put("roomId", roomId)
                 .put("signalType", signalType)
                 .put("payload", payload)
+                .put("meta", buildMessageMeta())
                 .toString()
         )
     }
@@ -102,6 +107,7 @@ class RemoteSignalClient(
                 .put("type", "rc_command")
                 .put("roomId", roomId)
                 .put("command", command.toJson())
+                .put("meta", buildMessageMeta())
                 .toString()
         )
     }
@@ -122,95 +128,95 @@ class RemoteSignalClient(
             val socket = okHttpClient.newWebSocket(
                 Request.Builder().url(params.url).build(),
                 object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    if (this@RemoteSignalClient.webSocket !== webSocket) {
-                        return
-                    }
-                    reconnectAttempt = 0
-                    onEvent(RemoteSignalEvent.Connected)
-                    webSocket.send(
-                        JSONObject()
-                            .put("type", "rc_join")
-                            .put("roomId", params.roomId)
-                            .put("role", params.role.wireValue)
-                            .put("displayName", params.displayName)
-                            .toString()
-                    )
-                }
-
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    if (this@RemoteSignalClient.webSocket !== webSocket) {
-                        return
-                    }
-                    runCatching {
-                        AppLog.d("RemoteSignalClient", "ws <= $text")
-                        val json = JSONObject(text)
-                        when (json.getString("type")) {
-                            "rc_joined" -> onEvent(
-                                RemoteSignalEvent.Joined(
-                                    clientId = json.getString("clientId"),
-                                    peers = json.getJSONArray("peers").toPeers(),
-                                    targetStatus = json.optJSONObject("targetStatus")?.let(RemoteTargetStatus::fromJson)
-                                )
-                            )
-
-                            "rc_peer_update" -> onEvent(
-                                RemoteSignalEvent.PeerUpdate(
-                                    peers = json.getJSONArray("peers").toPeers()
-                                )
-                            )
-
-                            "rc_target_status" -> onEvent(
-                                RemoteSignalEvent.TargetStatusReceived(
-                                    status = RemoteTargetStatus.fromJson(json.getJSONObject("targetStatus"))
-                                )
-                            )
-
-                            "rc_command" -> onEvent(
-                                RemoteSignalEvent.CommandReceived(
-                                    command = RemoteCommand.fromJson(json.getJSONObject("command")),
-                                    fromDisplayName = json.optString("fromDisplayName")
-                                )
-                            )
-
-                            "rc_signal" -> onEvent(
-                                RemoteSignalEvent.SignalReceived(
-                                    signalType = json.getString("signalType"),
-                                    payload = json.getJSONObject("payload"),
-                                    fromDisplayName = json.optString("fromDisplayName")
-                                )
-                            )
-
-                            "error" -> onEvent(RemoteSignalEvent.Error(json.getString("message")))
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        if (this@RemoteSignalClient.webSocket !== webSocket) {
+                            return
                         }
-                    }.onFailure {
-                        AppLog.logThrowable("RemoteSignalClient", it, "处理远控信令消息失败")
+                        reconnectAttempt = 0
+                        onEvent(RemoteSignalEvent.Connected)
+                        webSocket.send(
+                            JSONObject()
+                                .put("type", "rc_join")
+                                .put("roomId", params.roomId)
+                                .put("role", params.role.wireValue)
+                                .put("displayName", params.displayName)
+                                .put("authToken", params.authToken)
+                                .toString()
+                        )
                     }
-                }
 
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    if (this@RemoteSignalClient.webSocket !== webSocket) {
-                        return
-                    }
-                    this@RemoteSignalClient.webSocket = null
-                    if (manualDisconnect || connectParams == null) {
-                        onEvent(RemoteSignalEvent.Disconnected)
-                        return
-                    }
-                    scheduleReconnect("远控信令已断开: $reason")
-                }
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        if (this@RemoteSignalClient.webSocket !== webSocket) {
+                            return
+                        }
+                        runCatching {
+                            val json = JSONObject(text)
+                            when (json.getString("type")) {
+                                "rc_joined" -> onEvent(
+                                    RemoteSignalEvent.Joined(
+                                        clientId = json.getString("clientId"),
+                                        peers = json.getJSONArray("peers").toPeers(),
+                                        targetStatus = json.optJSONObject("targetStatus")?.let(RemoteTargetStatus::fromJson)
+                                    )
+                                )
 
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    if (this@RemoteSignalClient.webSocket !== webSocket) {
-                        return
+                                "rc_peer_update" -> onEvent(
+                                    RemoteSignalEvent.PeerUpdate(
+                                        peers = json.getJSONArray("peers").toPeers()
+                                    )
+                                )
+
+                                "rc_target_status" -> onEvent(
+                                    RemoteSignalEvent.TargetStatusReceived(
+                                        status = RemoteTargetStatus.fromJson(json.getJSONObject("targetStatus"))
+                                    )
+                                )
+
+                                "rc_command" -> onEvent(
+                                    RemoteSignalEvent.CommandReceived(
+                                        command = RemoteCommand.fromJson(json.getJSONObject("command")),
+                                        fromDisplayName = json.optString("fromDisplayName")
+                                    )
+                                )
+
+                                "rc_signal" -> onEvent(
+                                    RemoteSignalEvent.SignalReceived(
+                                        signalType = json.getString("signalType"),
+                                        payload = json.getJSONObject("payload"),
+                                        fromDisplayName = json.optString("fromDisplayName")
+                                    )
+                                )
+
+                                "error" -> onEvent(RemoteSignalEvent.Error(json.getString("message")))
+                            }
+                        }.onFailure {
+                            AppLog.logThrowable("RemoteSignalClient", it, "处理远控信令消息失败")
+                        }
                     }
-                    this@RemoteSignalClient.webSocket = null
-                    if (manualDisconnect || connectParams == null) {
-                        onEvent(RemoteSignalEvent.Disconnected)
-                        return
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        if (this@RemoteSignalClient.webSocket !== webSocket) {
+                            return
+                        }
+                        this@RemoteSignalClient.webSocket = null
+                        if (manualDisconnect || connectParams == null) {
+                            onEvent(RemoteSignalEvent.Disconnected)
+                            return
+                        }
+                        scheduleReconnect("远控信令已断开: $reason")
                     }
-                    scheduleReconnect("远控连接失败: ${t.message ?: "unknown"}")
-                }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        if (this@RemoteSignalClient.webSocket !== webSocket) {
+                            return
+                        }
+                        this@RemoteSignalClient.webSocket = null
+                        if (manualDisconnect || connectParams == null) {
+                            onEvent(RemoteSignalEvent.Disconnected)
+                            return
+                        }
+                        scheduleReconnect("远控连接失败: ${t.message ?: "unknown"}")
+                    }
                 }
             )
             webSocket = socket
@@ -234,7 +240,7 @@ class RemoteSignalClient(
         if (reconnectAttempt == 1) {
             UiFeedbackBus.emitTopToast("网络异常，远控信令正在重连")
         }
-        AppLog.w("RemoteSignalClient", "远控信令准备重连 attempt=$reconnectAttempt delayMs=$delayMs message=$message")
+        AppLog.w("RemoteSignalClient", "远控信令准备重连 attempt=$reconnectAttempt delayMs=$delayMs")
         onEvent(RemoteSignalEvent.Reconnecting(reconnectAttempt, delayMs, message))
         cancelReconnect()
         reconnectRunnable = Runnable {
@@ -254,5 +260,12 @@ class RemoteSignalClient(
     private fun closeCurrentSocket(code: Int, reason: String) {
         webSocket?.close(code, reason)
         webSocket = null
+    }
+
+    private fun buildMessageMeta(): JSONObject {
+        return JSONObject()
+            .put("traceId", UUID.randomUUID().toString())
+            .put("nonce", UUID.randomUUID().toString())
+            .put("issuedAt", System.currentTimeMillis())
     }
 }

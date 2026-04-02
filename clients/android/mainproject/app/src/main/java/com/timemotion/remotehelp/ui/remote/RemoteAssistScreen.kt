@@ -1,5 +1,7 @@
 package com.timemotion.remotehelp.ui.remote
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -26,20 +28,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -48,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,6 +76,7 @@ import com.timemotion.remotehelp.remote.RemoteControlUiState
 import com.timemotion.remotehelp.remote.RemoteRole
 import android.widget.FrameLayout
 import android.view.ViewGroup
+import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
@@ -110,60 +111,57 @@ fun RemoteAssistScreen(
         9f / 16f
     }
     val controllerName = uiState.peers.firstOrNull { it.role == RemoteRole.CONTROLLER }?.displayName ?: helperName
-    var isMoreMenuVisible by remember { mutableStateOf(false) }
+    val assistModeLabel = when {
+        side == DeviceSide.HELPER &&
+            uiState.targetStatus.captureActive &&
+            !uiState.targetStatus.accessibilityEnabled -> "当前为指引模式，无法直接代操作"
+        side == DeviceSide.HELPER &&
+            uiState.targetStatus.captureActive &&
+            uiState.targetStatus.accessibilityEnabled -> "当前为代操作模式"
+        else -> uiState.targetStatus.message
+    }
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF6EFE3)) {
         if (side == DeviceSide.HELPER) {
-            Scaffold(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color(0xFF122030))
-                    .systemBarsPadding(),
-                containerColor = Color.Transparent,
-                bottomBar = {
-                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        HelperAssistBottomBar(
-                            onSendText = onSendText,
-                            onSendBackspace = onSendBackspace,
-                            onSendEnter = onSendEnter,
-                            onSendBack = onSendBack,
-                            onSendHome = onSendHome,
-                            onSendRecents = onSendRecents,
-                            onEndClick = onEndClick,
-                            isMoreMenuVisible = isMoreMenuVisible,
-                            onOpenMore = { isMoreMenuVisible = true },
-                            onDismissMore = { isMoreMenuVisible = false },
-                            isSpeakerOn = isSpeakerOn,
-                            onToggleSpeaker = onToggleSpeaker,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            ) { innerPadding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
+                    .systemBarsPadding()
+            ) {
+                AssistTopOverlay(
+                    title = "正在协助：$elderName",
+                    subtitle = assistModeLabel,
+                    modifier = Modifier.fillMaxWidth()
                 )
-                {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(start = 4.dp, end = 6.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     HelperAssistBody(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
                         screenRenderer = screenRenderer,
                         screenAspectRatio = screenAspectRatio,
                         onFrameTap = onFrameTap,
                         onFrameSwipe = onFrameSwipe,
                         onFrameDrag = onFrameDrag
                     )
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.TopStart)
-                            .zIndex(1f)
-                    ) {
-                        AssistTopOverlay(
-                            title = "正在协助：$elderName",
-                            subtitle = uiState.targetStatus.message
-                        )
-                    }
+                    HelperAssistSideBar(
+                        onSendText = onSendText,
+                        onSendBackspace = onSendBackspace,
+                        onSendEnter = onSendEnter,
+                        onSendBack = onSendBack,
+                        onSendHome = onSendHome,
+                        onSendRecents = onSendRecents,
+                        onEndClick = onEndClick,
+                        isSpeakerOn = isSpeakerOn,
+                        onToggleSpeaker = onToggleSpeaker,
+                        modifier = Modifier.fillMaxHeight()
+                    )
                 }
             }
         } else {
@@ -246,44 +244,61 @@ private fun AssistTopOverlay(
     subtitle: String,
     modifier: Modifier = Modifier
 ) {
+    var targetAlpha by remember(title, subtitle) { mutableFloatStateOf(1f) }
+    val animatedAlpha by animateFloatAsState(
+        targetValue = targetAlpha,
+        animationSpec = tween(durationMillis = 450),
+        label = "assist_top_overlay_alpha"
+    )
+
+    LaunchedEffect(title, subtitle) {
+        targetAlpha = 1f
+        delay(2200)
+        targetAlpha = 0.26f
+    }
+
     Box(
-        modifier = modifier.padding(16.dp)
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .alpha(animatedAlpha)
     ) {
         Surface(
             color = Color(0xB31F2937),
-            shape = RoundedCornerShape(16.dp),
-            shadowElevation = 8.dp,
+            shape = RoundedCornerShape(12.dp),
+            shadowElevation = 4.dp,
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF))
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Pulse dot
                 Box(
                     modifier = Modifier
-                        .size(12.dp)
-                        .background(Color(0xFF00E676), RoundedCornerShape(6.dp))
-                        .border(2.dp, Color(0x4000E676), RoundedCornerShape(6.dp))
+                        .size(8.dp)
+                        .background(Color(0xFF00E676), RoundedCornerShape(4.dp))
+                        .border(1.dp, Color(0x4000E676), RoundedCornerShape(4.dp))
                 )
                 androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(12.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = title,
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = subtitle,
-                        color = Color(0xB3FFFFFF),
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = subtitle,
+                    color = Color(0xB3FFFFFF),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
@@ -343,7 +358,7 @@ private fun AssistEvidenceBanner(
 }
 
 @Composable
-private fun HelperAssistBottomBar(
+private fun HelperAssistSideBar(
     onSendText: (String) -> Unit,
     onSendBackspace: () -> Unit,
     onSendEnter: () -> Unit,
@@ -351,102 +366,71 @@ private fun HelperAssistBottomBar(
     onSendHome: () -> Unit,
     onSendRecents: () -> Unit,
     onEndClick: () -> Unit,
-    isMoreMenuVisible: Boolean,
-    onOpenMore: () -> Unit,
-    onDismissMore: () -> Unit,
     isSpeakerOn: Boolean,
     onToggleSpeaker: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var keyboardEnabled by rememberSaveable { mutableStateOf(false) }
-    Surface(
-        modifier = modifier,
-        color = Color(0xCC1F2937),
-        shape = RoundedCornerShape(24.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF))
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            if (keyboardEnabled) {
-                HelperAssistTextInputDock(
-                    onSendText = onSendText,
-                    onSendBackspace = onSendBackspace,
-                    onSendEnter = onSendEnter
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val itemWidth = 60.dp
-                AssistFloatingButton(
-                    title = "返回",
-                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    onClick = onSendBack,
-                    modifier = Modifier.width(itemWidth)
-                )
-                AssistFloatingButton(
-                    title = "桌面",
-                    icon = Icons.Filled.Home,
-                    onClick = onSendHome,
-                    modifier = Modifier.width(itemWidth)
-                )
-                AssistFloatingButton(
-                    title = "菜单",
-                    icon = Icons.Filled.Menu,
-                    onClick = onSendRecents,
-                    modifier = Modifier.width(itemWidth)
-                )
-                AssistFloatingButton(
-                    title = "输入",
-                    icon = Icons.Filled.Edit,
-                    active = keyboardEnabled,
-                    onClick = { keyboardEnabled = !keyboardEnabled },
-                    modifier = Modifier.width(itemWidth)
-                )
-                Box(
-                    modifier = Modifier.wrapContentSize(Alignment.TopEnd)
-                ) {
-                    Button(
-                        onClick = onOpenMore,
-                        modifier = Modifier.width(itemWidth),
-                        shape = RoundedCornerShape(14.dp),
-                        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0x33FFFFFF),
-                            contentColor = Color.White
-                        )
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "更多", modifier = Modifier.size(20.dp).padding(bottom = 4.dp))
-                            Text("更多", fontSize = 11.sp, maxLines = 1)
-                        }
-                    }
-                    DropdownMenu(
-                        expanded = isMoreMenuVisible,
-                        onDismissRequest = onDismissMore
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(if (isSpeakerOn) "关闭外放" else "开启外放") },
-                            onClick = {
-                                onDismissMore()
-                                onToggleSpeaker()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("结束协助") },
-                            onClick = {
-                                onDismissMore()
-                                onEndClick()
-                            }
-                        )
-                    }
-                }
-            }
+        if (keyboardEnabled) {
+            HelperAssistTextInputDock(
+                onSendText = onSendText,
+                onSendBackspace = onSendBackspace,
+                onSendEnter = onSendEnter
+            )
         }
+        val itemWidth = 34.dp
+        AssistFloatingButton(
+            title = "返回",
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            onClick = onSendBack,
+            compact = true,
+            modifier = Modifier.width(itemWidth)
+        )
+        AssistFloatingButton(
+            title = "桌面",
+            icon = Icons.Filled.Home,
+            onClick = onSendHome,
+            compact = true,
+            modifier = Modifier.width(itemWidth)
+        )
+        AssistFloatingButton(
+            title = "菜单",
+            icon = Icons.Filled.Menu,
+            onClick = onSendRecents,
+            compact = true,
+            modifier = Modifier.width(itemWidth)
+        )
+        AssistFloatingButton(
+            title = "输入",
+            icon = Icons.Filled.Edit,
+            active = keyboardEnabled,
+            onClick = { keyboardEnabled = !keyboardEnabled },
+            compact = true,
+            modifier = Modifier.width(itemWidth)
+        )
+        AssistFloatingButton(
+            title = if (isSpeakerOn) "听筒" else "外放",
+            icon = Icons.Filled.Info,
+            onClick = onToggleSpeaker,
+            compact = true,
+            modifier = Modifier.width(itemWidth)
+        )
+        androidx.compose.foundation.layout.Spacer(modifier = Modifier.weight(1f))
+        AssistFloatingButton(
+            title = "结束",
+            icon = Icons.Filled.Close,
+            onClick = onEndClick,
+            compact = true,
+            danger = true,
+            modifier = Modifier.width(itemWidth)
+        )
     }
 }
 
@@ -533,21 +517,37 @@ private fun AssistFloatingButton(
     icon: ImageVector? = null,
     onClick: () -> Unit,
     active: Boolean = false,
+    compact: Boolean = false,
+    danger: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Button(
         onClick = onClick,
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
+        contentPadding = if (compact) {
+            PaddingValues(vertical = 4.dp, horizontal = 2.dp)
+        } else {
+            PaddingValues(top = 8.dp, bottom = 8.dp)
+        },
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) Color(0xFF7189A6) else Color(0x2CFFFFFF),
+            containerColor = when {
+                danger -> Color(0x66C84B4B)
+                active -> Color(0xFF7189A6)
+                else -> Color(0x2CFFFFFF)
+            },
             contentColor = Color.White
         )
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             if (icon != null) {
-                Icon(icon, contentDescription = title, modifier = Modifier.size(20.dp).padding(bottom = 4.dp))
+                Icon(
+                    icon,
+                    contentDescription = title,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .padding(bottom = if (compact) 2.dp else 4.dp)
+                )
             }
             Text(title, fontSize = 11.sp, maxLines = 1)
         }
@@ -797,7 +797,7 @@ private fun ControlRendererPanel(
     }
     surfaceView.apply {
         setEnableHardwareScaler(true)
-        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         setZOrderMediaOverlay(true)
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
     }

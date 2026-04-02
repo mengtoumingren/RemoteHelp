@@ -49,6 +49,7 @@ class RemoteHelpForegroundService : Service() {
     private var currentNotificationText = "远程协助后台服务运行中"
     private lateinit var coordinatorInternal: RemoteHelpCoordinator
     private lateinit var helperOverlayManager: HelperVideoOverlayManager
+    private lateinit var guideOverlayManager: GuideOverlayManager
     private lateinit var evidenceStore: SecurityEvidenceStore
     @Volatile
     private var helperOverlayRequested = false
@@ -76,6 +77,7 @@ class RemoteHelpForegroundService : Service() {
             startAsForeground(currentNotificationText)
             coordinatorInternal = RemoteHelpCoordinator(applicationContext)
             evidenceStore = SecurityEvidenceStore(applicationContext)
+            guideOverlayManager = GuideOverlayManager(applicationContext)
             helperOverlayManager = HelperVideoOverlayManager(
                 appContext = applicationContext,
                 onHangUpClick = {
@@ -94,6 +96,9 @@ class RemoteHelpForegroundService : Service() {
                 }
                 }
             )
+            coordinatorInternal.remoteController.onGuideCommandRequested = { command ->
+                handleGuideCommand(command)
+            }
             observeCoordinatorState()
         }.onFailure {
             AppLog.logThrowable("RemoteHelpFgService", it, "前台服务启动失败")
@@ -146,7 +151,11 @@ class RemoteHelpForegroundService : Service() {
             if (this::helperOverlayManager.isInitialized) {
                 runCatching { helperOverlayManager.hide() }
             }
+            if (this::guideOverlayManager.isInitialized) {
+                runCatching { guideOverlayManager.hide() }
+            }
             if (this::coordinatorInternal.isInitialized) {
+                coordinatorInternal.remoteController.onGuideCommandRequested = null
                 coordinatorInternal.release()
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -170,6 +179,7 @@ class RemoteHelpForegroundService : Service() {
                 refreshNotification()
                 helperOverlayManager.updateSpeakerState(callState.isSpeakerOn)
                 scheduleHelperOverlayRefresh(uiState, callState)
+                refreshGuideOverlay(uiState, remoteState)
                 scheduleEvidenceCapture(uiState, callState, remoteState)
             }
         }
@@ -355,6 +365,54 @@ class RemoteHelpForegroundService : Service() {
                 delay(EVIDENCE_CAPTURE_INTERVAL_MS)
             }
         }
+    }
+
+    private fun refreshGuideOverlay(
+        uiState: RemoteHelpUiState,
+        remoteState: RemoteControlUiState
+    ) {
+        if (!this::guideOverlayManager.isInitialized) {
+            return
+        }
+        if (shouldShowGuideOverlay(uiState, remoteState)) {
+            runCatching { guideOverlayManager.show() }
+                .onFailure {
+                    AppLog.logThrowable("RemoteHelpFgService", it, "显示远程指引遮罩失败")
+                }
+        } else {
+            runCatching { guideOverlayManager.hide() }
+                .onFailure {
+                    AppLog.logThrowable("RemoteHelpFgService", it, "隐藏远程指引遮罩失败")
+                }
+        }
+    }
+
+    private fun handleGuideCommand(command: RemoteCommand): Boolean {
+        val uiState = coordinatorInternal.uiState.value
+        val remoteState = coordinatorInternal.remoteController.uiState.value
+        if (!shouldShowGuideOverlay(uiState, remoteState)) {
+            return false
+        }
+        return runCatching {
+            guideOverlayManager.show() && run {
+                guideOverlayManager.renderCommand(command, remoteState.targetStatus)
+                true
+            }
+        }.onFailure {
+            AppLog.logThrowable("RemoteHelpFgService", it, "显示远程指引失败")
+        }.getOrDefault(false)
+    }
+
+    private fun shouldShowGuideOverlay(
+        uiState: RemoteHelpUiState,
+        remoteState: RemoteControlUiState
+    ): Boolean {
+        return uiState.side == DeviceSide.ELDER &&
+            uiState.currentScreen == AppScreen.ASSIST &&
+            remoteState.targetStatus.captureActive &&
+            !remoteState.targetStatus.accessibilityEnabled &&
+            this::guideOverlayManager.isInitialized &&
+            guideOverlayManager.hasPermission()
     }
 
     private suspend fun captureEvidenceSnapshot(

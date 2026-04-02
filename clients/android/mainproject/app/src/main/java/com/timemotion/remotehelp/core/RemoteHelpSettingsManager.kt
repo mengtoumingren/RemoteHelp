@@ -1,6 +1,7 @@
 package com.timemotion.remotehelp.core
 
 import android.content.Context
+import com.timemotion.remotehelp.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class RemoteHelpSettingsManager(
@@ -12,6 +13,8 @@ class RemoteHelpSettingsManager(
     fun loadServerUrl(defaultValue: String): String = settingsStore.loadServerUrl(defaultValue)
 
     fun loadHelperName(defaultValue: String): String = settingsStore.loadHelperName(defaultValue)
+
+    fun loadInviteApiKey(defaultValue: String): String = settingsStore.loadInviteApiKey(defaultValue)
 
     fun loadStunServer(defaultValue: String): String = settingsStore.loadStunServer(defaultValue)
 
@@ -27,6 +30,10 @@ class RemoteHelpSettingsManager(
 
     fun updateHelperName(value: String) {
         uiState.value = uiState.value.copy(helperName = value)
+    }
+
+    fun updateInviteApiKey(value: String) {
+        uiState.value = uiState.value.copy(inviteApiKey = value)
     }
 
     fun updateStunServer(value: String) {
@@ -46,8 +53,19 @@ class RemoteHelpSettingsManager(
     }
 
     fun saveSettings() {
+        val serverUrl = uiState.value.serverUrl.trim()
+        if (!isAllowedServerUrl(serverUrl)) {
+            val banner = if (BuildConfig.ALLOW_INSECURE_TRANSPORT) {
+                "服务地址必须使用 ws:// 或 wss://"
+            } else {
+                "生产环境仅允许 wss:// 地址"
+            }
+            uiState.value = uiState.value.copy(bannerMessage = banner)
+            return
+        }
         settingsStore.save(
-            serverUrl = uiState.value.serverUrl.trim(),
+            serverUrl = serverUrl,
+            inviteApiKey = uiState.value.inviteApiKey.trim(),
             helperName = uiState.value.helperName.trim(),
             stunServer = uiState.value.stunServer.trim(),
             turnServer = uiState.value.turnServer.trim(),
@@ -57,5 +75,14 @@ class RemoteHelpSettingsManager(
         uiState.value = uiState.value.copy(
             bannerMessage = "设置已保存"
         )
+    }
+
+    private fun isAllowedServerUrl(serverUrl: String): Boolean {
+        val normalized = serverUrl.lowercase()
+        return if (BuildConfig.ALLOW_INSECURE_TRANSPORT) {
+            normalized.startsWith("ws://") || normalized.startsWith("wss://")
+        } else {
+            normalized.startsWith("wss://")
+        }
     }
 }

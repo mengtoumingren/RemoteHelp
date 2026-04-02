@@ -4,6 +4,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val inviteApiKey = providers.gradleProperty("REMOTEHELP_INVITE_API_KEY")
+    .orElse("")
+    .get()
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
 android {
     namespace = "com.timemotion.remotehelp"
     compileSdk {
@@ -16,13 +22,19 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.1"
+        buildConfigField("String", "INVITE_API_KEY", "\"$inviteApiKey\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "ALLOW_INSECURE_TRANSPORT", "true")
+        }
         release {
-            isMinifyEnabled = false
+            buildConfigField("boolean", "ALLOW_INSECURE_TRANSPORT", "false")
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -37,6 +49,7 @@ android {
         jvmTarget = "11"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
@@ -53,6 +66,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+    implementation(libs.androidx.security.crypto)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.google.webrtc)
     testImplementation(libs.junit)

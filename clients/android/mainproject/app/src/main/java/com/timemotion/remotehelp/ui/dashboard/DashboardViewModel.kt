@@ -13,6 +13,7 @@ class DashboardViewModel(
     val uiState: StateFlow<RemoteHelpUiState> = coordinator.uiState
 
     fun updateServerUrl(value: String) = coordinator.updateServerUrl(value)
+    fun updateInviteApiKey(value: String) = coordinator.updateInviteApiKey(value)
     fun updateHelperName(value: String) = coordinator.updateHelperName(value)
     fun updateStunServer(value: String) = coordinator.updateStunServer(value)
     fun updateTurnServer(value: String) = coordinator.updateTurnServer(value)

@@ -58,7 +58,7 @@ import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 import kotlinx.coroutines.flow.StateFlow
 
 data class CallUiState(
-    val serverUrl: String = "ws://10.0.2.2:3000/ws",
+    val serverUrl: String = "wss://help.yourdomain.com/ws",
     val roomId: String = "demo-room",
     val displayName: String = "Android-${UUID.randomUUID().toString().take(4)}",
     val status: String = "等待加入房间",
@@ -83,7 +83,7 @@ class CallController(
         private const val LOCAL_CAPTURE_HEIGHT = 720
         private const val LOCAL_CAPTURE_FPS = 30
         private const val SCREEN_SHARE_MAX_BITRATE_BPS = 800_000
-        private const val SCREEN_SHARE_MAX_FPS = 16
+        private const val SCREEN_SHARE_MAX_FPS = 10
         private const val LOCAL_CAMERA_TRACK_ID = "verification-video"
         private const val LOCAL_SCREEN_TRACK_ID = "screen-share-video"
         private const val EXTRA_SCREEN_CAPTURE_WIDTH = "remotehelp.extra.screen_capture_width"
@@ -132,6 +132,8 @@ class CallController(
     private val assistFrameSinkLock = Any()
     private var assistFrameBuffer: VideoFrame.I420Buffer? = null
     private var remoteClientId: String? = null
+    private var authToken: String = ""
+    private var participantRole: String = "helper"
     private var isMakingOffer = false
     private var isLocalCaptureStarted = false
     private var areLocalTracksAttached = false
@@ -166,6 +168,14 @@ class CallController(
 
     fun updateDisplayName(value: String) {
         _uiState.value = _uiState.value.copy(displayName = value)
+    }
+
+    fun updateAuthToken(value: String) {
+        authToken = value.trim()
+    }
+
+    fun updateParticipantRole(value: String) {
+        participantRole = value.trim().ifBlank { "helper" }
     }
 
     fun setOfferInitiator(value: Boolean) {
@@ -233,6 +243,10 @@ class CallController(
                 setStatus("请填写服务地址和房间号")
                 return@runCatching
             }
+            if (authToken.isBlank()) {
+                setStatus("缺少安全链路令牌，请重新生成协助请求")
+                return@runCatching
+            }
             allowRtcReconnect = true
             cancelRtcReconnect()
             rtcReconnectAttempt = 0
@@ -244,7 +258,9 @@ class CallController(
             signalClient.connect(
                 url = _uiState.value.serverUrl.trim(),
                 roomId = _uiState.value.roomId.trim(),
-                displayName = _uiState.value.displayName.trim().ifBlank { "AndroidUser" }
+                displayName = _uiState.value.displayName.trim().ifBlank { "AndroidUser" },
+                role = participantRole,
+                authToken = authToken
             )
         }.onFailure {
             AppLog.logThrowable("CallController", it, "加入房间失败")
@@ -1342,3 +1358,9 @@ private class SyntheticVideoCapturer : VideoCapturer {
 }
 
 private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
+
+
+
+
+
+

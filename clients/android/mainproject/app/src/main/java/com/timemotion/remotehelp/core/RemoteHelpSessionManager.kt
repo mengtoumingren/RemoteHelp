@@ -2,6 +2,8 @@ package com.timemotion.remotehelp.core
 
 import android.os.Handler
 import com.timemotion.remotehelp.remote.RemoteControlController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class RemoteHelpSessionManager(
@@ -9,16 +11,14 @@ class RemoteHelpSessionManager(
     private val historyManager: RemoteHelpHistoryManager,
     private val callController: com.timemotion.remotehelp.webrtc.CallController,
     private val remoteController: RemoteControlController,
+    private val serverApiClient: ServerApiClient,
     private val configureCallController: (ActiveHelpSession) -> Unit,
     private val configureRemoteController: (ActiveHelpSession) -> Unit,
     private val ensureVerificationRoomConnected: () -> Unit,
     private val cancelHelperWaitTimeout: () -> Unit,
-    private val mainHandler: Handler
+    private val mainHandler: Handler,
+    private val scope: CoroutineScope
 ) {
-    private var pendingInviteLinkBuildRunnable: Runnable? = null
-    private var pendingInvitePayload: HelpInvitePayload? = null
-    private var pendingInviteBuildStartedAt: Long = 0L
-
     fun updateElderName(value: String) {
         uiState.value = uiState.value.copy(elderName = value)
     }
@@ -45,50 +45,55 @@ class RemoteHelpSessionManager(
     }
 
     fun consumeInvite(raw: String) {
-        cancelPendingInviteLinkBuild()
-        HelpLinkCodec.parse(raw).onSuccess { payload ->
-            callController.leaveRoom()
-            remoteController.disconnect()
-            val token = HelpLinkCodec.encode(payload)
-            val session = ActiveHelpSession(
-                requestId = payload.requestId,
-                helperName = payload.helperName,
-                elderName = payload.elderName,
-                elderPhone = payload.elderPhone,
-                createdAt = payload.createdAt,
-                expiresAt = payload.expiresAt,
-                inviteToken = token,
-                deepLink = HelpLinkCodec.buildDeepLink(token, payload.sessionId),
-                stage = HelpStage.VERIFYING
-            )
-            uiState.value = uiState.value.copy(
-                side = DeviceSide.ELDER,
-                helperName = payload.helperName,
-                elderName = payload.elderName,
-                elderPhone = payload.elderPhone,
-                inviteEntry = raw,
-                pendingInviteSession = session,
-                isVerificationRequestVisible = false,
-                activeSession = null,
-                currentScreen = AppScreen.DASHBOARD,
-                bannerMessage = "已识别协助链接，请确认信息后进入视频核验",
-                helperLocationPermissionGranted = false,
-                helperLocationSummary = null,
-                helperLocationUpdatedAt = null
-            )
-            configureCallController(session)
-            ensureVerificationRoomConnected()
-        }.onFailure {
-            callController.leaveRoom()
-            remoteController.disconnect()
-            uiState.value = uiState.value.copy(
-                inviteEntry = "",
-                pendingInviteSession = null,
-                isVerificationRequestVisible = false,
-                activeSession = null,
-                currentScreen = AppScreen.DASHBOARD,
-                bannerMessage = it.message ?: "链接解析失败"
-            )
+        val state = uiState.value
+        uiState.value = state.copy(bannerMessage = "正在校验协助链接")
+        scope.launch {
+            runCatching {
+                serverApiClient.resolveInvite(state.serverUrl, raw, state.inviteApiKey)
+            }.onSuccess { invite ->
+                callController.leaveRoom()
+                remoteController.disconnect()
+                val session = ActiveHelpSession(
+                    requestId = invite.requestId,
+                    helperName = invite.helperName,
+                    elderName = invite.elderName,
+                    elderPhone = invite.elderPhone,
+                    createdAt = invite.createdAt,
+                    expiresAt = invite.expiresAt,
+                    inviteToken = invite.inviteToken,
+                    channelToken = invite.channelToken,
+                    deepLink = invite.deepLink,
+                    stage = HelpStage.VERIFYING
+                )
+                uiState.value = uiState.value.copy(
+                    side = DeviceSide.ELDER,
+                    helperName = invite.helperName,
+                    elderName = invite.elderName,
+                    elderPhone = invite.elderPhone,
+                    inviteEntry = raw,
+                    pendingInviteSession = session,
+                    isVerificationRequestVisible = false,
+                    activeSession = null,
+                    currentScreen = AppScreen.DASHBOARD,
+                    bannerMessage = "已识别协助链接，请确认信息后进入视频核验",
+                    helperLocationPermissionGranted = false,
+                    helperLocationSummary = null,
+                    helperLocationUpdatedAt = null
+                )
+                configureCallController(session)
+                ensureVerificationRoomConnected()
+            }.onFailure {
+                callController.leaveRoom()
+                remoteController.disconnect()
+                uiState.value = uiState.value.copy(
+                    inviteEntry = "",
+                    pendingInviteSession = null,
+                    isVerificationRequestVisible = false,
+                    activeSession = null,
+                    currentScreen = AppScreen.DASHBOARD,
+                    bannerMessage = it.message ?: "链接解析失败"
+                )
+            }
         }
     }
 
@@ -101,15 +106,14 @@ class RemoteHelpSessionManager(
         }
         cancelHelperWaitTimeout()
         callController.leaveRoom()
-        val now = System.currentTimeMillis()
+        remoteController.disconnect()
         val payload = HelpLinkCodec.createInvitePayload(
             helperName = state.helperName,
             elderName = state.elderName,
             elderPhone = phone,
-            now = now
+            now = System.currentTimeMillis()
         )
-        historyManager.saveRecentContact(payload.elderName, payload.elderPhone, now)
-        val session = ActiveHelpSession(
+        val pendingSession = ActiveHelpSession(
             requestId = payload.requestId,
             helperName = payload.helperName,
             elderName = payload.elderName,
@@ -117,25 +121,56 @@ class RemoteHelpSessionManager(
             createdAt = payload.createdAt,
             expiresAt = payload.expiresAt,
             inviteToken = "",
+            channelToken = "",
             deepLink = "",
             stage = HelpStage.REQUEST_CREATED
         )
         uiState.value = state.copy(
-            recentContacts = historyManager.loadRecentContacts(),
             pendingInviteSession = null,
             isVerificationRequestVisible = false,
-            activeSession = session,
+            activeSession = pendingSession,
             side = DeviceSide.HELPER,
             currentScreen = AppScreen.SESSION,
-            bannerMessage = "协助请求已生成，正在连接房间",
+            bannerMessage = "正在生成安全协助链接",
             helperLocationPermissionGranted = false,
             helperLocationSummary = null,
             helperLocationUpdatedAt = null
         )
-        historyManager.savePendingHelperSession(session)
-        configureCallController(session)
-        ensureVerificationRoomConnected()
-        waitForVerificationRoomReadyThenBuildInvite(session.requestId, payload)
+        scope.launch {
+            runCatching {
+                serverApiClient.createInvite(state.serverUrl, payload, state.inviteApiKey)
+            }.onSuccess { invite ->
+                historyManager.saveRecentContact(invite.elderName, invite.elderPhone, invite.createdAt)
+                val session = ActiveHelpSession(
+                    requestId = invite.requestId,
+                    helperName = invite.helperName,
+                    elderName = invite.elderName,
+                    elderPhone = invite.elderPhone,
+                    createdAt = invite.createdAt,
+                    expiresAt = invite.expiresAt,
+                    inviteToken = invite.inviteToken,
+                    channelToken = invite.channelToken,
+                    deepLink = invite.deepLink,
+                    stage = HelpStage.REQUEST_CREATED
+                )
+                historyManager.savePendingHelperSession(session)
+                uiState.value = uiState.value.copy(
+                    recentContacts = historyManager.loadRecentContacts(),
+                    activeSession = session,
+                    bannerMessage = "协助请求已生成，正在等待对方认证短信链接"
+                )
+                configureCallController(session)
+                ensureVerificationRoomConnected()
+            }.onFailure {
+                historyManager.clearPendingHelperSession()
+                callController.leaveRoom()
+                uiState.value = uiState.value.copy(
+                    activeSession = null,
+                    currentScreen = AppScreen.DASHBOARD,
+                    bannerMessage = it.message ?: "安全链接生成失败"
+                )
+            }
+        }
     }
 
     fun applyRecentContact(contact: RecentContact) {
@@ -204,64 +239,4 @@ class RemoteHelpSessionManager(
             dashboardPage = page
         )
     }
-
-    private fun waitForVerificationRoomReadyThenBuildInvite(sessionId: String, payload: HelpInvitePayload) {
-        cancelPendingInviteLinkBuild()
-        pendingInvitePayload = payload
-        pendingInviteBuildStartedAt = System.currentTimeMillis()
-        pendingInviteLinkBuildRunnable = object : Runnable {
-            override fun run() {
-                val currentSession = uiState.value.activeSession
-                val currentSessionId = currentSession?.requestId
-                if (
-                    currentSessionId != sessionId ||
-                    uiState.value.side != DeviceSide.HELPER ||
-                    uiState.value.currentScreen != AppScreen.SESSION
-                ) {
-                    cancelPendingInviteLinkBuild()
-                    return
-                }
-                val callState = callController.uiState.value
-                if (callState.isInRoom) {
-                    val payloadSnapshot = pendingInvitePayload ?: payload
-                    val token = HelpLinkCodec.encode(payloadSnapshot)
-                    val sessionWithLink = currentSession.copy(
-                        inviteToken = token,
-                        deepLink = HelpLinkCodec.buildDeepLink(token, payloadSnapshot.sessionId)
-                    )
-                    historyManager.savePendingHelperSession(sessionWithLink)
-                    uiState.value = uiState.value.copy(
-                        activeSession = sessionWithLink,
-                        bannerMessage = "协助请求已生成，正在等待对方认证短信链接"
-                    )
-                    cancelPendingInviteLinkBuild()
-                    return
-                }
-                val elapsed = System.currentTimeMillis() - pendingInviteBuildStartedAt
-                if (elapsed >= PENDING_INVITE_ROOM_TIMEOUT_MS) {
-                    cancelPendingInviteLinkBuild()
-                    callController.leaveRoom()
-                    historyManager.clearPendingHelperSession()
-                    uiState.value = uiState.value.copy(
-                        activeSession = null,
-                        currentScreen = AppScreen.DASHBOARD,
-                        bannerMessage = "房间创建失败，请重试"
-                    )
-                    return
-                }
-                mainHandler.postDelayed(this, PENDING_INVITE_POLL_INTERVAL_MS)
-            }
-        }
-        mainHandler.post(pendingInviteLinkBuildRunnable!!)
-    }
-
-    private fun cancelPendingInviteLinkBuild() {
-        pendingInviteLinkBuildRunnable?.let(mainHandler::removeCallbacks)
-        pendingInviteLinkBuildRunnable = null
-        pendingInvitePayload = null
-        pendingInviteBuildStartedAt = 0L
-    }
 }
-
-private const val PENDING_INVITE_POLL_INTERVAL_MS = 200L
-private const val PENDING_INVITE_ROOM_TIMEOUT_MS = 15_000L

@@ -2,6 +2,8 @@ package com.timemotion.remotehelp.webrtc
 
 import android.os.Handler
 import android.os.Looper
+import com.timemotion.remotehelp.core.AppLog
+import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -10,8 +12,6 @@ import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
-import com.timemotion.remotehelp.core.AppLog
-import com.timemotion.remotehelp.ui.shared.UiFeedbackBus
 
 sealed interface SignalEvent {
     data object Connected : SignalEvent
@@ -53,7 +53,9 @@ class SignalClient(
     private data class ConnectParams(
         val url: String,
         val roomId: String,
-        val displayName: String
+        val displayName: String,
+        val role: String,
+        val authToken: String
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -64,9 +66,10 @@ class SignalClient(
     private var reconnectRunnable: Runnable? = null
     private var manualDisconnect = false
 
-    fun connect(url: String, roomId: String, displayName: String) {
+    fun connect(url: String, roomId: String, displayName: String, role: String, authToken: String) {
         runCatching {
-            connectParams = ConnectParams(url.trim(), roomId.trim(), displayName.trim())
+            require(authToken.isNotBlank()) { "缺少链路令牌，请重新生成协助链接" }
+            connectParams = ConnectParams(url.trim(), roomId.trim(), displayName.trim(), role.trim(), authToken.trim())
             manualDisconnect = false
             reconnectAttempt = 0
             cancelReconnect()
@@ -87,6 +90,7 @@ class SignalClient(
                 .put("targetClientId", targetClientId)
                 .put("signalType", type)
                 .put("payload", payload)
+                .put("meta", buildMessageMeta())
                 .toString()
         )
     }
@@ -115,91 +119,92 @@ class SignalClient(
         runCatching {
             val request = Request.Builder().url(params.url).build()
             val socket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (this@SignalClient.webSocket !== webSocket) {
-                    return
-                }
-                reconnectAttempt = 0
-                onEvent(SignalEvent.Connected)
-                webSocket.send(
-                    JSONObject()
-                        .put("type", "join")
-                        .put("roomId", params.roomId)
-                        .put("displayName", params.displayName)
-                        .put("sessionId", sessionId)
-                        .toString()
-                )
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                if (this@SignalClient.webSocket !== webSocket) {
-                    return
-                }
-                runCatching {
-                    AppLog.d(TAG, "ws <= $text")
-                    val json = JSONObject(text)
-                    val type = json.getString("type")
-                    AppLog.d(TAG, "ws <= type=$type roomId=${params.roomId} sessionId=$sessionId")
-                    when (type) {
-                        "joined" -> onEvent(
-                            SignalEvent.Joined(
-                                clientId = json.getString("clientId"),
-                                participants = json.optJSONArray("participants").toStringList()
-                            )
-                        )
-
-                        "peer-joined" -> onEvent(
-                            SignalEvent.PeerJoined(
-                                clientId = json.getString("clientId"),
-                                displayName = json.optString("displayName")
-                            )
-                        )
-
-                        "peer-left" -> onEvent(
-                            SignalEvent.PeerLeft(
-                                clientId = json.getString("clientId")
-                            )
-                        )
-
-                        "signal" -> onEvent(
-                            SignalEvent.SignalMessage(
-                                fromClientId = json.getString("fromClientId"),
-                                fromDisplayName = json.optString("fromDisplayName"),
-                                signalType = json.getString("signalType"),
-                                payload = json.getJSONObject("payload")
-                            )
-                        )
-
-                        "error" -> onEvent(SignalEvent.Error(json.getString("message")))
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (this@SignalClient.webSocket !== webSocket) {
+                        return
                     }
-                }.onFailure {
-                    AppLog.logThrowable(TAG, it, "处理信令消息失败")
+                    reconnectAttempt = 0
+                    onEvent(SignalEvent.Connected)
+                    webSocket.send(
+                        JSONObject()
+                            .put("type", "join")
+                            .put("roomId", params.roomId)
+                            .put("displayName", params.displayName)
+                            .put("sessionId", sessionId)
+                            .put("role", params.role)
+                            .put("authToken", params.authToken)
+                            .toString()
+                    )
                 }
-            }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (this@SignalClient.webSocket !== webSocket) {
-                    return
-                }
-                this@SignalClient.webSocket = null
-                if (manualDisconnect || connectParams == null) {
-                    onEvent(SignalEvent.Disconnected)
-                    return
-                }
-                scheduleReconnect("WS 已断开: $reason")
-            }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (this@SignalClient.webSocket !== webSocket) {
+                        return
+                    }
+                    runCatching {
+                        val json = JSONObject(text)
+                        val type = json.getString("type")
+                        AppLog.d(TAG, "ws <= type=$type room=${params.roomId.takeLast(6)}")
+                        when (type) {
+                            "joined" -> onEvent(
+                                SignalEvent.Joined(
+                                    clientId = json.getString("clientId"),
+                                    participants = json.optJSONArray("participants").toStringList()
+                                )
+                            )
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (this@SignalClient.webSocket !== webSocket) {
-                    return
+                            "peer-joined" -> onEvent(
+                                SignalEvent.PeerJoined(
+                                    clientId = json.getString("clientId"),
+                                    displayName = json.optString("displayName")
+                                )
+                            )
+
+                            "peer-left" -> onEvent(
+                                SignalEvent.PeerLeft(
+                                    clientId = json.getString("clientId")
+                                )
+                            )
+
+                            "signal" -> onEvent(
+                                SignalEvent.SignalMessage(
+                                    fromClientId = json.getString("fromClientId"),
+                                    fromDisplayName = json.optString("fromDisplayName"),
+                                    signalType = json.getString("signalType"),
+                                    payload = json.getJSONObject("payload")
+                                )
+                            )
+
+                            "error" -> onEvent(SignalEvent.Error(json.getString("message")))
+                        }
+                    }.onFailure {
+                        AppLog.logThrowable(TAG, it, "处理信令消息失败")
+                    }
                 }
-                this@SignalClient.webSocket = null
-                if (manualDisconnect || connectParams == null) {
-                    onEvent(SignalEvent.Disconnected)
-                    return
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (this@SignalClient.webSocket !== webSocket) {
+                        return
+                    }
+                    this@SignalClient.webSocket = null
+                    if (manualDisconnect || connectParams == null) {
+                        onEvent(SignalEvent.Disconnected)
+                        return
+                    }
+                    scheduleReconnect("WS 已断开: $reason")
                 }
-                scheduleReconnect("信令连接失败: ${t.message ?: "unknown"}")
-            }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (this@SignalClient.webSocket !== webSocket) {
+                        return
+                    }
+                    this@SignalClient.webSocket = null
+                    if (manualDisconnect || connectParams == null) {
+                        onEvent(SignalEvent.Disconnected)
+                        return
+                    }
+                    scheduleReconnect("信令连接失败: ${t.message ?: "unknown"}")
+                }
             })
             webSocket = socket
         }.onFailure {
@@ -223,7 +228,7 @@ class SignalClient(
         if (reconnectAttempt == 1) {
             UiFeedbackBus.emitTopToast("网络异常，信令正在重连")
         }
-        AppLog.w(TAG, "信令准备重连 attempt=$reconnectAttempt delayMs=$delayMs message=$message")
+        AppLog.w(TAG, "信令准备重连 attempt=$reconnectAttempt delayMs=$delayMs")
         onEvent(SignalEvent.Reconnecting(reconnectAttempt, delayMs, message))
         cancelReconnect()
         reconnectRunnable = Runnable {
@@ -243,6 +248,13 @@ class SignalClient(
     private fun closeCurrentSocket(code: Int, reason: String) {
         webSocket?.close(code, reason)
         webSocket = null
+    }
+
+    private fun buildMessageMeta(): JSONObject {
+        return JSONObject()
+            .put("traceId", UUID.randomUUID().toString())
+            .put("nonce", UUID.randomUUID().toString())
+            .put("issuedAt", System.currentTimeMillis())
     }
 }
 

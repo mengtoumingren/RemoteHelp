@@ -46,6 +46,7 @@ import com.timemotion.remotehelp.core.RemoteHelpUiState
 fun SettingsPage(
     uiState: RemoteHelpUiState,
     onServerUrlChange: (String) -> Unit,
+    onInviteApiKeyChange: (String) -> Unit,
     onHelperNameChange: (String) -> Unit,
     onStunServerChange: (String) -> Unit,
     onTurnServerChange: (String) -> Unit,
@@ -118,6 +119,18 @@ fun SettingsPage(
                             value = uiState.serverUrl,
                             onValueChange = onServerUrlChange,
                             label = { Text("信令服务地址") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF215A6D),
+                                focusedLabelColor = Color(0xFF215A6D)
+                            ),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = uiState.inviteApiKey,
+                            onValueChange = onInviteApiKeyChange,
+                            label = { Text("邀请接口 API Key") },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
@@ -203,7 +216,7 @@ fun SettingsPage(
                             Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
                                 Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF526277), modifier = Modifier.padding(end = 8.dp))
                                 Text(
-                                    text = "模拟器一般使用 ws://10.0.2.2:3000/ws，真机联调请改成宿主机局域网 IP，例如 ws://192.168.2.109:3000/ws。",
+                                    text = "生产环境请使用 wss:// 域名地址。仅限 Debug 联调时可使用 ws://10.0.2.2:3000/ws 或局域网 ws://<ip>:3000/ws。",
                                     color = Color(0xFF526277),
                                     style = MaterialTheme.typography.bodyMedium
                                 )

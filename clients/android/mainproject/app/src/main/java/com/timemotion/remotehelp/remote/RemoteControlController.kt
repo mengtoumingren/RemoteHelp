@@ -19,7 +19,7 @@ class RemoteControlController(
         private const val SCREEN_SHARE_MIN_HEIGHT = 320
         private const val SCREEN_SHARE_MAX_LONG_SIDE = 900
         private const val SCREEN_SHARE_MAX_BITRATE_BPS = 800_000
-        private const val SCREEN_SHARE_MAX_FPS = 16
+        private const val SCREEN_SHARE_MAX_FPS = 10
         private const val TARGET_STATUS_STARTING = "屏幕采集权限已授权，正在启动屏幕流"
         private const val TARGET_STATUS_READY_WITH_ACCESSIBILITY = "屏幕流已启动，可接受远程协助"
         private const val TARGET_STATUS_READY_NEED_ACCESSIBILITY = "屏幕流已启动，请开启无障碍服务"
@@ -31,9 +31,11 @@ class RemoteControlController(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val okHttpClient = okhttp3.OkHttpClient.Builder().build()
     private val signalClient = RemoteSignalClient(okHttpClient, ::onSignalEvent)
+    private var authToken: String = ""
 
     var onScreenShareStartRequested: ((Intent) -> Boolean)? = null
     var onScreenShareStopRequested: (() -> Unit)? = null
+    var onGuideCommandRequested: ((RemoteCommand) -> Boolean)? = null
     private var isForegroundServiceActive = false
     private var pendingScreenCaptureData: Intent? = null
     private var pendingScreenCaptureProfile: CaptureProfile? = null
@@ -64,6 +66,10 @@ class RemoteControlController(
         _uiState.value = _uiState.value.copy(displayName = value)
     }
 
+    fun updateAuthToken(value: String) {
+        authToken = value.trim()
+    }
+
     fun selectRole(role: RemoteRole) {
         _uiState.value = _uiState.value.copy(selectedRole = role)
     }
@@ -74,12 +80,17 @@ class RemoteControlController(
             pushStatus("请填写服务地址和房间号")
             return
         }
+        if (authToken.isBlank()) {
+            pushStatus("缺少远控安全令牌，请重新生成协助请求")
+            return
+        }
         pushStatus("连接中")
         signalClient.connect(
             url = state.serverUrl.trim(),
             roomId = state.roomId.trim(),
             role = state.selectedRole,
-            displayName = state.displayName.trim().ifBlank { state.selectedRole.title }
+            displayName = state.displayName.trim().ifBlank { state.selectedRole.title },
+            authToken = authToken
         )
     }
 
@@ -284,6 +295,7 @@ class RemoteControlController(
         RemoteAccessibilityService.softKeyboardStateListener = null
         ScreenCaptureForegroundService.statusListener = null
         ScreenCaptureForegroundService.messageListener = null
+        onGuideCommandRequested = null
         okHttpClient.dispatcher.executorService.shutdown()
     }
 
@@ -335,14 +347,15 @@ class RemoteControlController(
                         appendLog("收到 ${event.fromDisplayName} 的 ${event.command.action.name}")
                         val accessibility = RemoteAccessibilityService.instance
                         if (accessibility == null) {
+                            val guided = onGuideCommandRequested?.invoke(event.command) == true
                             updateTargetStatus(
                                 _uiState.value.targetStatus.copy(
                                     accessibilityEnabled = false,
                                     softKeyboardHidden = isSoftKeyboardHidden(),
-                                    message = "未开启无障碍服务，无法执行远控指令"
+                                    message = if (guided) "未开启无障碍服务，请按屏幕提示操作" else "未开启无障碍服务，无法执行远控指令"
                                 )
                             )
-                            appendLog("无障碍服务未开启，命令未执行")
+                            appendLog(if (guided) "无障碍未开启，已显示远程指引" else "无障碍服务未开启，命令未执行")
                             return@post
                         }
                         val success = accessibility.execute(event.command)
@@ -373,13 +386,14 @@ class RemoteControlController(
     }
 
     private fun allowDisconnectCleanup() {
-        stopScreenShare()
+        val currentStatus = _uiState.value.targetStatus
+        val preserveCapture = _uiState.value.selectedRole == RemoteRole.TARGET && currentStatus.captureActive
         updateTargetStatus(
-            _uiState.value.targetStatus.copy(
-                captureActive = false,
+            currentStatus.copy(
+                captureActive = if (preserveCapture) currentStatus.captureActive else false,
                 accessibilityEnabled = isAccessibilityEnabled(),
                 softKeyboardHidden = isSoftKeyboardHidden(),
-                message = "等待重新连接"
+                message = if (preserveCapture) "控制通道已断开，正在重连" else "等待重新连接"
             )
         )
         _uiState.value = _uiState.value.copy(
@@ -532,3 +546,7 @@ private data class CaptureProfile(
 )
 
 private fun Int.ensureEven(): Int = if (this % 2 == 0) this else this - 1
+
+
+
+
