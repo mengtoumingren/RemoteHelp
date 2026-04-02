@@ -5,6 +5,12 @@ RemoteHelp 是一个面向家庭远程协助场景的 Android + Node.js 项目�
 - 统一的 Android 主应用 `clients/android/mainproject`
 - 用于联调的 Node.js 信令服务 `server/`
 
+## 应用截图
+
+![RemoteHelp 首页截图](./screenshots/Screenshot_20260402_203757.png)
+
+![RemoteHelp 需要协助界面](./screenshots/Screenshot_20260402_204135.png)
+
 ## 文档入口
 
 - [使用文档（含协助方/被协助方操作说明）](./docs/user-guide.md)
